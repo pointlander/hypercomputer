@@ -1,0 +1,5 @@
+/hypercomputer
+/cmd/hypercomputer/hypercomputer
+*.png
+*.out
+*.test
