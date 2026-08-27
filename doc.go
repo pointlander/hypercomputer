@@ -21,4 +21,5 @@
 //   - a Zeno / accelerated machine that takes step n in time 2^{-n}
 //   - halt-set and Chaitin Ω oracles encoded as reals
 //   - an analog recurrent net that reads a Cantor-encoded oracle
+//   - a state-vector quantum circuit simulator over BitFloat complexes
 package hypercomputer

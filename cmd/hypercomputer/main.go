@@ -14,7 +14,7 @@ import (
 )
 
 func main() {
-	demo := flag.String("demo", "all", "bits, oracle, zeno, omega, arnn, newton, or all")
+	demo := flag.String("demo", "all", "bits, oracle, zeno, omega, arnn, newton, quantum, or all")
 	prec := flag.Uint("prec", 256, "mantissa precision in bits")
 	flag.Parse()
 
@@ -31,6 +31,8 @@ func main() {
 		demoARNN(*prec)
 	case "newton":
 		demoNewton(*prec)
+	case "quantum":
+		demoQuantum(*prec)
 	case "all":
 		demoBits(*prec)
 		demoOracle(*prec)
@@ -38,6 +40,7 @@ func main() {
 		demoOmega(*prec)
 		demoARNN(*prec)
 		demoNewton(*prec)
+		demoQuantum(*prec)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown demo %q\n", *demo)
 		flag.Usage()
@@ -171,6 +174,38 @@ func demoNewton(prec uint) {
 	want := hc.New(prec).Sqrt(hc.FromInt(prec, 2))
 	fmt.Printf("newton  %s\n", m.R[1].Text('g', 48))
 	fmt.Printf("sqrt    %s\n", want.Text('g', 48))
+	fmt.Println()
+}
+
+func demoQuantum(prec uint) {
+	fmt.Println("== quantum circuits ==")
+	bell := hc.Bell(prec)
+	fmt.Println("Bell (|00⟩+|11⟩)/√2:")
+	fmt.Print(bell)
+
+	ghz := hc.GHZ(prec, 3)
+	fmt.Println("GHZ₃:")
+	fmt.Print(ghz)
+
+	g := hc.Grover2(prec)
+	fmt.Println("Grover₂ targeting |11⟩:")
+	fmt.Print(g)
+
+	c := hc.Deutsch(prec, false)
+	_, p1 := c.ProbQubit(0)
+	fmt.Printf("Deutsch constant  P(q0=1)=%s\n", p1.Text('g', 12))
+	b := hc.Deutsch(prec, true)
+	_, p1 = b.ProbQubit(0)
+	fmt.Printf("Deutsch balanced  P(q0=1)=%s\n", p1.Text('g', 12))
+
+	qft := hc.NewQState(prec, 3)
+	qft.QFT()
+	fmt.Println("QFT|000⟩ (uniform):")
+	fmt.Print(qft)
+
+	tel := hc.Teleport(prec, func(c *hc.QCircuit) { c.X(0) })
+	_, p1 = tel.ProbQubit(2)
+	fmt.Printf("teleport |1⟩ → q2  P(q2=1)=%s\n", p1.Text('g', 12))
 	fmt.Println()
 }
 

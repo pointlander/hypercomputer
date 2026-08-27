@@ -18,6 +18,7 @@ bits (`math/big.Float` plus analog bit operations). On top of it:
 - a Zeno machine (step `n` takes time `2^{-(n+1)}`)
 - bounded halt-set and Chaitin Ω oracles encoded as reals
 - an analog recurrent net that pops a Cantor-encoded oracle
+- a state-vector quantum circuit simulator (Clifford+T, rotations, QFT)
 
 Finite machines cannot decide the true halting set. The oracle here is
 the *bounded* halt set of small TMs, packed into a real; as the step
@@ -29,4 +30,5 @@ visible.
 ```bash
 go test ./...
 go run ./cmd/hypercomputer -demo=all -prec=256
+go run ./cmd/hypercomputer -demo=quantum -prec=256
 ```
