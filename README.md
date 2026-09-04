@@ -19,6 +19,7 @@ bits (`math/big.Float` plus analog bit operations). On top of it:
 - bounded halt-set and Chaitin Ω oracles encoded as reals
 - an analog recurrent net that pops a Cantor-encoded oracle
 - a state-vector quantum circuit simulator (Clifford+T, rotations, QFT)
+- Kolmogorov complexity of a bit string via the analog halt oracle
 
 Finite machines cannot decide the true halting set. The oracle here is
 the *bounded* halt set of small TMs, packed into a real; as the step
@@ -31,4 +32,5 @@ visible.
 go test ./...
 go run ./cmd/hypercomputer -demo=all -prec=256
 go run ./cmd/hypercomputer -demo=quantum -prec=256
+go run ./cmd/hypercomputer -demo=kcomplexity -kstring=1111 -kstates=2
 ```

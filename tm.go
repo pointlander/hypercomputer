@@ -77,6 +77,35 @@ func decodeTrans(code, nstates int) Transition {
 	return Transition{Write: write, Move: mv, Next: nst}
 }
 
+func encodeTrans(t Transition, nstates int) int {
+	write := t.Write & 1
+	move := 0
+	if t.Move > 0 {
+		move = 1
+	}
+	next := 0
+	if t.Next >= 0 {
+		next = t.Next + 1
+		if next > nstates {
+			next = nstates
+		}
+	}
+	return write + 2*move + 4*next
+}
+
+// Index is the inverse of TMFromIndex.
+func (tm *TM) Index() int {
+	r := transRadix(tm.States)
+	idx, mul := 0, 1
+	for s := 0; s < tm.States; s++ {
+		for read := 0; read < 2; read++ {
+			idx += encodeTrans(tm.Delta[s][read], tm.States) * mul
+			mul *= r
+		}
+	}
+	return idx
+}
+
 // TMFromIndex returns the n-state TM with the given enumeration index.
 func TMFromIndex(index, nstates int) *TM {
 	r := transRadix(nstates)
@@ -145,6 +174,36 @@ func (c *Config) Ones() int {
 		}
 	}
 	return n
+}
+
+// Output is the 1-span of the tape: bits from the leftmost 1 to the
+// rightmost 1, zeros in between kept. A tape with no 1s is empty.
+func (c *Config) Output() []bool {
+	if c.Tape == nil {
+		return nil
+	}
+	min, max := 0, 0
+	found := false
+	for i, v := range c.Tape {
+		if v != 1 {
+			continue
+		}
+		if !found || i < min {
+			min = i
+		}
+		if !found || i > max {
+			max = i
+		}
+		found = true
+	}
+	if !found {
+		return nil
+	}
+	out := make([]bool, max-min+1)
+	for i := min; i <= max; i++ {
+		out[i-min] = c.Tape[i] == 1
+	}
+	return out
 }
 
 // AnalogTM is a TM whose tape is two Cantor stacks (left of the head,
@@ -227,6 +286,35 @@ func (a *AnalogTM) TapeBit(d int) int {
 		return a.Right.CantorBitAt(d)
 	}
 	return a.Left.CantorBitAt(-d - 1)
+}
+
+// Output is the 1-span of the analog tape over offsets [−span, span].
+func (a *AnalogTM) Output(span int) []bool {
+	if span < 1 {
+		span = 64
+	}
+	min, max := 0, 0
+	found := false
+	for d := -span; d <= span; d++ {
+		if a.TapeBit(d) != 1 {
+			continue
+		}
+		if !found || d < min {
+			min = d
+		}
+		if !found || d > max {
+			max = d
+		}
+		found = true
+	}
+	if !found {
+		return nil
+	}
+	out := make([]bool, max-min+1)
+	for d := min; d <= max; d++ {
+		out[d-min] = a.TapeBit(d) == 1
+	}
+	return out
 }
 
 // Zeno is an accelerated Turing machine: step n is allotted time

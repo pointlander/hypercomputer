@@ -14,8 +14,10 @@ import (
 )
 
 func main() {
-	demo := flag.String("demo", "all", "bits, oracle, zeno, omega, arnn, newton, quantum, or all")
+	demo := flag.String("demo", "all", "bits, oracle, zeno, omega, arnn, newton, quantum, kcomplexity, or all")
 	prec := flag.Uint("prec", 256, "mantissa precision in bits")
+	kstring := flag.String("kstring", "", "bit string for k-complexity (e.g. 1111)")
+	kstates := flag.Int("kstates", 1, "n-state TM family for k-complexity")
 	flag.Parse()
 
 	switch *demo {
@@ -33,6 +35,8 @@ func main() {
 		demoNewton(*prec)
 	case "quantum":
 		demoQuantum(*prec)
+	case "kcomplexity":
+		demoKComplexity(*prec, *kstring, *kstates)
 	case "all":
 		demoBits(*prec)
 		demoOracle(*prec)
@@ -41,6 +45,7 @@ func main() {
 		demoARNN(*prec)
 		demoNewton(*prec)
 		demoQuantum(*prec)
+		demoKComplexity(*prec, *kstring, *kstates)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown demo %q\n", *demo)
 		flag.Usage()
@@ -206,6 +211,36 @@ func demoQuantum(prec uint) {
 	tel := hc.Teleport(prec, func(c *hc.QCircuit) { c.X(0) })
 	_, p1 = tel.ProbQubit(2)
 	fmt.Printf("teleport |1⟩ → q2  P(q2=1)=%s\n", p1.Text('g', 12))
+	fmt.Println()
+}
+
+func demoKComplexity(prec uint, kstring string, kstates int) {
+	fmt.Println("== Kolmogorov complexity (analog halt oracle) ==")
+	if kstates < 1 {
+		kstates = 1
+	}
+	run := func(s string, nstates int) {
+		x := hc.ParseBitString(s)
+		r := hc.KComplexity(x, nstates, 32, prec)
+		fmt.Println(r)
+		if r.AnalogOK {
+			fmt.Printf("  analog TM witness tape matches, oracle queries=%d analog-steps=%d\n",
+				r.Queries, r.AnalogSteps)
+		} else if !r.ByPrint {
+			fmt.Printf("  analog witness mismatch, queries=%d\n", r.Queries)
+		}
+	}
+	if kstring != "" {
+		run(kstring, kstates)
+		fmt.Println()
+		return
+	}
+	for _, s := range []string{"", "1", "11", "101", "1111"} {
+		run(s, 1)
+	}
+	fmt.Println("2-state family:")
+	run("1", 2)
+	run("1111", 2)
 	fmt.Println()
 }
 

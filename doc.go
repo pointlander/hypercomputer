@@ -22,4 +22,5 @@
 //   - halt-set and Chaitin Ω oracles encoded as reals
 //   - an analog recurrent net that reads a Cantor-encoded oracle
 //   - a state-vector quantum circuit simulator over BitFloat complexes
+//   - Kolmogorov complexity of bit strings via the analog halt oracle
 package hypercomputer
