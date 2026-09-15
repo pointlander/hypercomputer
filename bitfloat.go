@@ -9,29 +9,28 @@ import (
 )
 
 const (
-	// DefaultPrec is the default mantissa precision in bits.
+	// DefaultPrec is the default working precision in bits for
+	// truncated series (√, π, sin, cos) and dyadic rounding.
 	DefaultPrec uint = 256
-	// GuardBits is extra mantissa bits kept so analog shifts and
-	// Cantor pops do not round away readable oracle bits.
+	// GuardBits is extra bits kept while summing truncated series.
 	GuardBits uint = 64
 )
 
-// BitFloat is a high-precision binary floating-point number.
-// Precision is the mantissa width in bits. Analog hypercomputation
-// primitives (Bernoulli shift, Cantor stack) treat the fractional
-// bits as an infinite tape.
+// BitFloat is a rational number (math/big.Rat) used as an analog
+// register. Field operations and the Bernoulli / Cantor maps are
+// exact in ℚ. Prec is the working bit precision for truncated
+// series that leave ℚ (√, π, sin, cos) and for Truncate.
 type BitFloat struct {
-	f *big.Float
+	r    *big.Rat
+	prec uint
 }
 
-// New returns a BitFloat 0 with the given mantissa precision.
+// New returns a BitFloat 0 with the given working precision.
 func New(prec uint) *BitFloat {
 	if prec == 0 {
 		prec = DefaultPrec
 	}
-	return &BitFloat{
-		f: new(big.Float).SetPrec(prec).SetMode(big.ToNearestEven),
-	}
+	return &BitFloat{r: new(big.Rat), prec: prec}
 }
 
 // PrecBits returns a precision large enough to hold n analog bits
@@ -46,26 +45,26 @@ func PrecBits(n int) uint {
 // FromInt returns n as a BitFloat.
 func FromInt(prec uint, n int64) *BitFloat {
 	z := New(prec)
-	z.f.SetInt64(n)
+	z.r.SetInt64(n)
 	return z
 }
 
 // FromRat returns num/den as a BitFloat.
 func FromRat(prec uint, num, den int64) *BitFloat {
 	z := New(prec)
-	z.f.SetRat(big.NewRat(num, den))
+	z.r.SetFrac64(num, den)
 	return z
 }
 
 // FromFloat64 returns x as a BitFloat.
 func FromFloat64(prec uint, x float64) *BitFloat {
 	z := New(prec)
-	z.f.SetFloat64(x)
+	z.r.SetFloat64(x)
 	return z
 }
 
 // FromBits encodes bits as the binary fraction 0.b0 b1 b2 ...
-// with trailing zeros. Exact when prec >= len(bits).
+// with trailing zeros. Exact in ℚ.
 func FromBits(prec uint, bits []bool) *BitFloat {
 	if prec == 0 {
 		prec = PrecBits(len(bits))
@@ -81,9 +80,8 @@ func FromBits(prec uint, bits []bool) *BitFloat {
 			n.SetBit(n, 0, 1)
 		}
 	}
-	num := new(big.Float).SetPrec(prec).SetInt(n)
-	den := new(big.Float).SetPrec(prec).SetInt(new(big.Int).Lsh(big.NewInt(1), uint(len(bits))))
-	z.f.Quo(num, den)
+	den := new(big.Int).Lsh(big.NewInt(1), uint(len(bits)))
+	z.r.SetFrac(n, den)
 	return z
 }
 
@@ -96,9 +94,7 @@ func CantorZeros(prec uint) *BitFloat {
 //
 //	x = Σ_i (2 b_i + 1) / 4^{i+1}
 //
-// with an infinite tail of zeros (value 1/3). Each trit is 1 or 3,
-// so the representation is unique and stable under analog satlin
-// extraction (Siegelmann–Sontag).
+// with an infinite tail of zeros (value 1/3). Exact in ℚ.
 func FromCantor(prec uint, bits []bool) *BitFloat {
 	if prec == 0 {
 		prec = PrecBits(2 * len(bits))
@@ -114,26 +110,34 @@ func FromCantor(prec uint, bits []bool) *BitFloat {
 	return z
 }
 
-// Prec returns the mantissa precision in bits.
+// Prec returns the working precision in bits.
 func (x *BitFloat) Prec() uint {
-	if x == nil || x.f == nil {
+	if x == nil {
 		return 0
 	}
-	return x.f.Prec()
+	return x.prec
 }
 
-// SetPrec sets the mantissa precision in bits.
+// SetPrec sets the working precision in bits. The rational value
+// is unchanged; use Truncate to round to a dyadic of that width.
 func (x *BitFloat) SetPrec(prec uint) *BitFloat {
 	x.ensure(prec)
+	x.prec = prec
 	return x
 }
 
 func (z *BitFloat) ensure(prec uint) {
-	if z.f == nil {
-		z.f = new(big.Float).SetMode(big.ToNearestEven)
+	if z.r == nil {
+		z.r = new(big.Rat)
 	}
-	if prec > 0 && z.f.Prec() != prec {
-		z.f.SetPrec(prec)
+	if prec > z.prec {
+		z.prec = prec
+	}
+}
+
+func (z *BitFloat) cap() {
+	if z.prec > 0 && z.r != nil {
+		truncToBits(z.r, z.prec)
 	}
 }
 
@@ -150,126 +154,165 @@ func (z *BitFloat) fit(xs ...*BitFloat) {
 // Copy returns a deep copy.
 func (x *BitFloat) Copy() *BitFloat {
 	z := New(x.Prec())
-	z.f.Copy(x.f)
+	z.r.Set(x.r)
 	return z
 }
 
 // Set copies x into z.
 func (z *BitFloat) Set(x *BitFloat) *BitFloat {
 	z.fit(x)
-	z.f.Copy(x.f)
+	z.r.Set(x.r)
 	return z
 }
 
 // SetInt64 sets z to n.
 func (z *BitFloat) SetInt64(n int64) *BitFloat {
 	z.ensure(z.Prec())
-	z.f.SetInt64(n)
+	z.r.SetInt64(n)
 	return z
 }
 
 // Sign returns -1, 0, or 1.
 func (x *BitFloat) Sign() int {
-	return x.f.Sign()
+	return x.r.Sign()
 }
 
 // Cmp compares x and y.
 func (x *BitFloat) Cmp(y *BitFloat) int {
-	return x.f.Cmp(y.f)
+	return x.r.Cmp(y.r)
 }
 
 // IsInt reports whether x is an integer.
 func (x *BitFloat) IsInt() bool {
-	return x.f.IsInt()
+	return x.r.IsInt()
 }
 
-// Acc returns the mantissa as a big.Float for inspection.
-func (x *BitFloat) Big() *big.Float {
-	return new(big.Float).Copy(x.f)
+// Big returns a copy of the underlying rational.
+func (x *BitFloat) Big() *big.Rat {
+	return new(big.Rat).Set(x.r)
 }
 
 // Float64 returns the nearest float64 value.
 func (x *BitFloat) Float64() float64 {
-	v, _ := x.f.Float64()
-	return v
+	f, _ := x.r.Float64()
+	return f
 }
 
 // String returns a decimal representation with digits matching the
-// mantissa precision.
+// working precision.
 func (x *BitFloat) String() string {
 	digits := int(x.Prec()) * 301 / 1000
 	if digits < 8 {
 		digits = 8
 	}
-	return x.f.Text('g', digits)
+	return x.Text('g', digits)
 }
 
-// Text is math/big.Float.Text.
+// Text returns a decimal string with prec digits after the point.
 func (x *BitFloat) Text(format byte, prec int) string {
-	return x.f.Text(format, prec)
+	_ = format
+	if prec < 0 {
+		prec = 6
+	}
+	if x.Sign() == 0 {
+		if prec == 0 {
+			return "0"
+		}
+		return x.r.FloatString(prec)
+	}
+	return x.r.FloatString(prec)
 }
 
 // Add sets z to x + y.
 func (z *BitFloat) Add(x, y *BitFloat) *BitFloat {
 	z.fit(x, y)
-	z.f.Add(x.f, y.f)
+	z.r.Add(x.r, y.r)
 	return z
 }
 
 // Sub sets z to x - y.
 func (z *BitFloat) Sub(x, y *BitFloat) *BitFloat {
 	z.fit(x, y)
-	z.f.Sub(x.f, y.f)
+	z.r.Sub(x.r, y.r)
 	return z
 }
 
-// Mul sets z to x * y.
+// Mul sets z to x * y, then rounds to working precision.
 func (z *BitFloat) Mul(x, y *BitFloat) *BitFloat {
 	z.fit(x, y)
-	z.f.Mul(x.f, y.f)
+	z.r.Mul(x.r, y.r)
+	z.cap()
 	return z
 }
 
-// Quo sets z to x / y.
+// Quo sets z to x / y, then rounds to working precision.
 func (z *BitFloat) Quo(x, y *BitFloat) *BitFloat {
 	z.fit(x, y)
-	z.f.Quo(x.f, y.f)
+	z.r.Quo(x.r, y.r)
+	z.cap()
 	return z
 }
 
 // Neg sets z to -x.
 func (z *BitFloat) Neg(x *BitFloat) *BitFloat {
 	z.fit(x)
-	z.f.Neg(x.f)
+	z.r.Neg(x.r)
 	return z
 }
 
 // Abs sets z to |x|.
 func (z *BitFloat) Abs(x *BitFloat) *BitFloat {
 	z.fit(x)
-	z.f.Abs(x.f)
+	z.r.Abs(x.r)
 	return z
 }
 
-// Sqrt sets z to √x.
+// Sqrt sets z to √x by Newton iteration in ℚ, truncated to working
+// precision after each step.
 func (z *BitFloat) Sqrt(x *BitFloat) *BitFloat {
 	z.fit(x)
-	z.f.Sqrt(x.f)
+	if x.Sign() < 0 {
+		z.r.SetInt64(0)
+		return z
+	}
+	if x.Sign() == 0 {
+		z.r.SetInt64(0)
+		return z
+	}
+	p := z.Prec()
+	wp := p + GuardBits
+	g := new(big.Rat).SetInt64(1)
+	two := big.NewRat(2, 1)
+	tmp := new(big.Rat)
+	eps := pow2Rat(-(int(p) + 8))
+	for n := 0; n < int(p)+16; n++ {
+		tmp.Quo(x.r, g)
+		tmp.Add(g, tmp)
+		tmp.Quo(tmp, two)
+		diff := new(big.Rat).Sub(tmp, g)
+		g.Set(tmp)
+		truncToBits(g, wp)
+		if ratAbsCmp(diff, eps) <= 0 {
+			break
+		}
+	}
+	truncToBits(g, p)
+	z.r.Set(g)
 	return z
 }
 
 // Floor sets z to ⌊x⌋ (toward −∞).
 func (z *BitFloat) Floor(x *BitFloat) *BitFloat {
 	z.fit(x)
-	if x.f.IsInf() {
-		z.f.Copy(x.f)
-		return z
+	num := new(big.Int).Set(x.r.Num())
+	den := new(big.Int).Set(x.r.Denom())
+	q := new(big.Int)
+	rem := new(big.Int)
+	q.QuoRem(num, den, rem)
+	if x.r.Sign() < 0 && rem.Sign() != 0 {
+		q.Sub(q, big.NewInt(1))
 	}
-	i, acc := x.f.Int(nil)
-	if x.f.Sign() < 0 && acc != big.Exact {
-		i.Sub(i, big.NewInt(1))
-	}
-	z.f.SetInt(i)
+	z.r.SetInt(q)
 	return z
 }
 
@@ -284,40 +327,33 @@ func (z *BitFloat) Frac(x *BitFloat) *BitFloat {
 //	0    if x < 0
 //	x    if 0 ≤ x ≤ 1
 //	1    if x > 1
-//
-// used by analog recurrent nets.
 func (z *BitFloat) SatLin(x *BitFloat) *BitFloat {
 	z.fit(x)
-	zero := FromInt(x.Prec(), 0)
+	if x.Sign() <= 0 {
+		z.r.SetInt64(0)
+		return z
+	}
 	one := FromInt(x.Prec(), 1)
-	if x.Cmp(zero) <= 0 {
-		z.f.SetInt64(0)
-		return z
-	}
 	if x.Cmp(one) >= 0 {
-		z.f.SetInt64(1)
+		z.r.SetInt64(1)
 		return z
 	}
-	z.f.Copy(x.f)
+	z.r.Set(x.r)
 	return z
 }
 
 // Bit returns the leading fractional bit of x: 1 if x ≥ 1/2, else 0.
-// For x in [0, 1) this is the first bit of the binary expansion.
 func (x *BitFloat) Bit() int {
-	half := FromRat(x.Prec(), 1, 2)
-	if x.Cmp(half) >= 0 {
+	if x.Cmp(FromRat(x.Prec(), 1, 2)) >= 0 {
 		return 1
 	}
 	return 0
 }
 
 // Shift sets z to the Bernoulli map T(x) = 2x − ⌊2x⌋ (2x mod 1).
-// Iterating Shift and Bit reads the binary expansion of x.
 func (z *BitFloat) Shift(x *BitFloat) *BitFloat {
 	z.fit(x)
-	two := FromInt(x.Prec(), 2)
-	z.Mul(two, x)
+	z.Mul(FromInt(x.Prec(), 2), x)
 	fl := New(z.Prec()).Floor(z)
 	return z.Sub(z, fl)
 }
@@ -365,18 +401,26 @@ func (x *BitFloat) Binary(n int) string {
 //
 //	x = sign × 2^exp × 0.bits
 //
-// with 0.5 ≤ |mantissa| < 1 for x ≠ 0 (IEEE-style).
+// with 0.5 ≤ |mantissa| < 1 for x ≠ 0.
 func (x *BitFloat) Mantissa() (sign int, exp int, bits []bool) {
 	sign = x.Sign()
 	if sign == 0 {
 		return 0, 0, make([]bool, int(x.Prec()))
 	}
-	m := new(big.Float).SetPrec(x.Prec())
-	exp = x.f.MantExp(m)
-	if sign < 0 {
-		m.Neg(m)
+	y := x.Copy()
+	y.Abs(y)
+	one := FromInt(y.Prec(), 1)
+	half := FromRat(y.Prec(), 1, 2)
+	two := FromInt(y.Prec(), 2)
+	for y.Cmp(one) >= 0 {
+		y.Quo(y, two)
+		exp++
 	}
-	return sign, exp, (&BitFloat{f: m}).Bits(int(x.Prec()))
+	for y.Cmp(half) < 0 {
+		y.Mul(y, two)
+		exp--
+	}
+	return sign, exp, y.Bits(int(x.Prec()))
 }
 
 // CantorBit returns the top bit of a Cantor-encoded stack:
@@ -446,18 +490,75 @@ func (x *BitFloat) CantorBitAt(k int) int {
 	return bit
 }
 
-// ApproxEq reports whether |x − y| < 2^{-bits}.
+// ApproxEq reports whether |x − y| ≤ 2^{−bits}.
 func (x *BitFloat) ApproxEq(y *BitFloat, bits uint) bool {
 	d := New(max(x.Prec(), y.Prec())).Sub(x, y)
 	d.Abs(d)
-	eps := New(d.Prec())
-	eps.f.SetMantExp(big.NewFloat(1).SetPrec(d.Prec()), -int(bits))
-	return d.Cmp(eps) <= 0
+	return d.Cmp(Pow2(d.Prec(), -int(bits))) <= 0
+}
+
+// Truncate rounds z to the nearest multiple of 2^{−bits} (a dyadic
+// rational of that width) and sets the working precision to bits.
+func (z *BitFloat) Truncate(bits uint) *BitFloat {
+	z.ensure(bits)
+	truncToBits(z.r, bits)
+	z.prec = bits
+	return z
 }
 
 // Pow2 returns 2^e as a BitFloat.
 func Pow2(prec uint, e int) *BitFloat {
 	z := New(prec)
-	z.f.SetMantExp(big.NewFloat(1).SetPrec(prec), e)
+	z.r.Set(pow2Rat(e))
 	return z
+}
+
+func pow2Rat(e int) *big.Rat {
+	r := new(big.Rat)
+	if e >= 0 {
+		r.SetInt(new(big.Int).Lsh(big.NewInt(1), uint(e)))
+		return r
+	}
+	r.SetFrac(big.NewInt(1), new(big.Int).Lsh(big.NewInt(1), uint(-e)))
+	return r
+}
+
+func truncToBits(r *big.Rat, bits uint) {
+	if bits == 0 || r.Sign() == 0 {
+		if r.Sign() == 0 {
+			r.SetInt64(0)
+		}
+		return
+	}
+	pow := new(big.Int).Lsh(big.NewInt(1), bits)
+	scaled := new(big.Rat).Mul(r, new(big.Rat).SetInt(pow))
+	n := roundRatToInt(scaled)
+	r.SetFrac(n, pow)
+}
+
+func roundRatToInt(r *big.Rat) *big.Int {
+	num := new(big.Int).Set(r.Num())
+	den := new(big.Int).Set(r.Denom())
+	if den.Cmp(big.NewInt(1)) == 0 {
+		return num
+	}
+	q := new(big.Int)
+	rem := new(big.Int)
+	q.QuoRem(num, den, rem)
+	absRem := new(big.Int).Abs(rem)
+	absRem.Lsh(absRem, 1)
+	if absRem.Cmp(den) >= 0 {
+		if num.Sign() >= 0 {
+			q.Add(q, big.NewInt(1))
+		} else {
+			q.Sub(q, big.NewInt(1))
+		}
+	}
+	return q
+}
+
+func ratAbsCmp(x, y *big.Rat) int {
+	ax := new(big.Rat).Abs(x)
+	ay := new(big.Rat).Abs(y)
+	return ax.Cmp(ay)
 }

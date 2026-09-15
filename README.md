@@ -1,17 +1,15 @@
 # hypercomputer
 
-Simulation of analog hypercomputation using high-precision bit floats.
+Simulation of analog hypercomputation using exact rationals (`math/big.Rat`).
 
 A real in [0, 1] has infinitely many binary digits. Analog operations
-extract those digits: the Bernoulli map `2x mod 1` reads a binary
-expansion, and a Cantor (base-4) stack with saturated-linear neurons
-reads a noise-stable encoding (Siegelmann–Sontag). With infinite
-precision this is a hypercomputer; with a `p`-bit float it is a
-`p`-bit approximation — precision is the resource that stands in for
-the missing infinite tape.
+extract those digits exactly in ℚ: the Bernoulli map `2x mod 1` and
+the Cantor (base-4) stack with saturated-linear neurons (Siegelmann–Sontag).
+√, π, sin, and cos are truncated rational series at a working bit
+precision `p`. `Truncate` rounds a value to a dyadic of width `p`,
+which is the analog of a finite tape.
 
-The numeric type is a binary float whose mantissa width is measured in
-bits (`math/big.Float` plus analog bit operations). On top of it:
+The numeric type is a `big.Rat` with an analog bit API. On top of it:
 
 - a BSS-style real register machine
 - 2-symbol Turing machines with analog Cantor-stack tapes
@@ -22,9 +20,9 @@ bits (`math/big.Float` plus analog bit operations). On top of it:
 - Kolmogorov complexity of a bit string via the analog halt oracle
 
 Finite machines cannot decide the true halting set. The oracle here is
-the *bounded* halt set of small TMs, packed into a real; as the step
-bound and the mantissa width grow, more of the genuine oracle is
-visible.
+the *bounded* halt set of small TMs, packed into a rational; as the
+step bound and the readable bit depth grow, more of the genuine oracle
+is visible.
 
 ## Usage
 

@@ -3,18 +3,16 @@
 // license that can be found in the LICENSE file.
 
 // Package hypercomputer simulates analog hypercomputation using
-// high-precision binary floating-point numbers.
+// exact rationals (math/big.Rat).
 //
 // A real in [0, 1] carries infinitely many bits. Analog operations
-// (the Bernoulli doubling map, Cantor-stack pop) extract those bits.
-// With infinite precision this is a genuine hypercomputer in the
-// sense of Siegelmann–Sontag and Moore; with a p-bit float it is a
-// p-bit approximation: the first p bits of an encoded oracle are
-// readable, and p is a first-class resource.
+// (the Bernoulli doubling map, Cantor-stack pop) extract those bits
+// exactly in ℚ. Transcendentals used by the quantum simulator
+// (√, π, sin, cos) are truncated rational series at a working bit
+// precision p; Truncate rounds a value to a dyadic of width p.
 //
-// The numeric type is BitFloat, a binary float whose precision is
-// measured in bits (math/big.Float with an analog bit API). On top of
-// it the package provides:
+// The numeric type is BitFloat, a big.Rat with an analog bit API.
+// On top of it the package provides:
 //
 //   - a BSS-style real register machine
 //   - Turing machines with analog (Cantor-stack) tapes

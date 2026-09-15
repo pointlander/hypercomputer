@@ -11,7 +11,8 @@ var (
 	piByPrec = map[uint]*BitFloat{}
 )
 
-// Pi returns π at the given mantissa precision.
+// Pi returns π at the given working precision, via Machin's formula
+// with a truncated rational arctan series.
 func Pi(prec uint) *BitFloat {
 	if prec == 0 {
 		prec = DefaultPrec
@@ -28,19 +29,17 @@ func Pi(prec uint) *BitFloat {
 
 // machinPi uses Machin's formula: π/4 = 4 arctan(1/5) − arctan(1/239).
 func machinPi(prec uint) *BitFloat {
-	wp := prec + 32
+	wp := prec + GuardBits
 	a := atanInv(wp, 5)
 	b := atanInv(wp, 239)
 	t := New(wp).Mul(FromInt(wp, 4), a)
 	t.Sub(t, b)
 	t.Mul(t, FromInt(wp, 4))
-	out := New(prec)
-	out.f.SetPrec(prec)
-	out.f.Set(t.f)
-	return out
+	t.Truncate(prec)
+	return t
 }
 
-// atanInv returns arctan(1/n) by Taylor series.
+// atanInv returns arctan(1/n) by a truncated Taylor series in ℚ.
 func atanInv(prec uint, n int64) *BitFloat {
 	x := FromRat(prec, 1, n)
 	xx := New(prec).Mul(x, x)
@@ -57,6 +56,8 @@ func atanInv(prec uint, n int64) *BitFloat {
 			sum.Add(sum, t)
 		}
 		neg = !neg
+		truncToBits(sum.r, prec)
+		truncToBits(term.r, prec)
 		if New(prec).Abs(t).Cmp(eps) <= 0 {
 			break
 		}
@@ -64,19 +65,19 @@ func atanInv(prec uint, n int64) *BitFloat {
 	return sum
 }
 
-// Sin sets z to sin(x), using argument reduction and a Taylor series.
+// Sin sets z to sin(x), using argument reduction and a truncated
+// Taylor series in ℚ.
 func (z *BitFloat) Sin(x *BitFloat) *BitFloat {
 	p := max(z.Prec(), x.Prec())
 	if p == 0 {
 		p = DefaultPrec
 	}
-	wp := p + 16
+	wp := p + GuardBits
 	pi := Pi(wp)
 	twoPi := New(wp).Mul(FromInt(wp, 2), pi)
 	halfPi := New(wp).Quo(pi, FromInt(wp, 2))
 
 	y := New(wp).Set(x)
-	y.SetPrec(wp)
 	q := New(wp).Quo(y, twoPi)
 	y.Sub(y, New(wp).Mul(New(wp).Floor(q), twoPi))
 
@@ -92,10 +93,8 @@ func (z *BitFloat) Sin(x *BitFloat) *BitFloat {
 	if sign < 0 {
 		s.Neg(s)
 	}
-	z.ensure(p)
-	z.f.Set(s.f)
-	z.f.SetPrec(p)
-	return z
+	s.Truncate(p)
+	return z.Set(s)
 }
 
 // Cos sets z to cos(x) = sin(x + π/2).
@@ -108,7 +107,7 @@ func (z *BitFloat) Cos(x *BitFloat) *BitFloat {
 	return z.Sin(New(p).Add(x, halfPi))
 }
 
-// sinSeries evaluates sin(x) for x in [0, π/2].
+// sinSeries evaluates sin(x) for x in [0, π/2] with truncated terms.
 func sinSeries(x *BitFloat) *BitFloat {
 	prec := x.Prec()
 	sum := x.Copy()
@@ -120,7 +119,9 @@ func sinSeries(x *BitFloat) *BitFloat {
 		term.Neg(term)
 		term.Quo(term, FromInt(prec, 2*n))
 		term.Quo(term, FromInt(prec, 2*n+1))
+		truncToBits(term.r, prec)
 		sum.Add(sum, term)
+		truncToBits(sum.r, prec)
 		if New(prec).Abs(term).Cmp(eps) <= 0 {
 			break
 		}

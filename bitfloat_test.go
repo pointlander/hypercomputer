@@ -6,7 +6,6 @@ package hypercomputer
 
 import (
 	"math"
-	"math/big"
 	"testing"
 )
 
@@ -149,12 +148,13 @@ func TestPrecisionLimitsOracleDepth(t *testing.T) {
 	}
 	full := FromBits(PrecBits(n), bits)
 	if bitsString(full.Bits(n)) != bitsString(bits) {
-		t.Fatal("full precision should recover all bits")
+		t.Fatal("exact Rat should recover all bits")
 	}
-	shallow := FromBits(12, bits)
+	shallow := FromBits(PrecBits(n), bits)
+	shallow.Truncate(12)
 	got := shallow.Bits(n)
 	if bitsString(got[:6]) != bitsString(bits[:6]) {
-		t.Fatalf("leading bits should survive 12-bit precision: got %s want %s",
+		t.Fatalf("leading bits should survive 12-bit truncation: got %s want %s",
 			bitsString(got[:6]), bitsString(bits[:6]))
 	}
 	mismatch := 0
@@ -164,18 +164,21 @@ func TestPrecisionLimitsOracleDepth(t *testing.T) {
 		}
 	}
 	if mismatch == 0 {
-		t.Fatal("low precision should lose later oracle bits")
+		t.Fatal("12-bit truncation should lose later oracle bits")
 	}
 }
 
-func TestNewtonMatchesBigSqrt(t *testing.T) {
+func TestNewtonMatchesSqrt2(t *testing.T) {
 	prec := uint(256)
-	x := FromInt(prec, 2)
-	got := New(prec).Sqrt(x)
-	want := new(big.Float).SetPrec(prec)
-	want.Sqrt(big.NewFloat(2).SetPrec(prec))
-	if got.Big().Cmp(want) != 0 {
-		t.Fatalf("sqrt(2) mismatch: %s vs %s", got, want.Text('g', 40))
+	got := New(prec).Sqrt(FromInt(prec, 2))
+	sq := New(prec).Mul(got, got)
+	if !sq.ApproxEq(FromInt(prec, 2), 200) {
+		t.Fatalf("sqrt(2)^2 = %s", sq.Text('g', 40))
+	}
+	//  √2 = 1.4142135623730950488…
+	s := got.Text('f', 20)
+	if s[:18] != "1.4142135623730950" {
+		t.Fatalf("sqrt(2) = %s", s)
 	}
 }
 
