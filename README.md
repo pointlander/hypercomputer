@@ -20,6 +20,7 @@ The numeric type is a `big.Rat` with an analog bit API. On top of it:
 - a state-vector quantum circuit simulator (Clifford+T, rotations, QFT)
 - Kolmogorov complexity of a bit string via the analog halt oracle
 - Chaitin reconstruction of K_U from analog bits of Ω_U
+- a p×T resource sweep (analog Ω bits × dovetail bound)
 
 Finite machines cannot decide the true halting set. The oracle here is
 the *bounded* halt set of small TMs, packed into a rational; as the
@@ -34,4 +35,5 @@ go run ./cmd/hypercomputer -demo=all -prec=256
 go run ./cmd/hypercomputer -demo=quantum -prec=256
 go run ./cmd/hypercomputer -demo=kcomplexity -kstring=1111 -kbits=12
 go run ./cmd/hypercomputer -demo=chaitin -kbits=8
+go run ./cmd/hypercomputer -demo=sweep
 ```

@@ -150,17 +150,22 @@ func KFromOmegaValue(x []bool, omega *BitFloat, m, maxBits, bound int) *KResult 
 		bound = DefaultUBound
 	}
 	rec := Reconstruct(omega, m, maxBits, bound)
+	return rec.KOf(x)
+}
+
+// KOf classifies x from an already-reconstructed short halt set.
+func (rec *ReconstructResult) KOf(x []bool) *KResult {
 	r := &KResult{
 		Bits:        append([]bool(nil), x...),
 		K:           -1,
 		How:         "chaitin-incomplete",
-		Bound:       bound,
-		MaxBits:     maxBits,
+		Bound:       rec.Bound,
+		MaxBits:     rec.MaxBits,
 		Queries:     rec.Stage,
 		AnalogSteps: rec.AnalogSteps,
 		AnalogOK:    rec.Caught,
 		OmegaBits:   rec.OmegaBits,
-		M:           m,
+		M:           rec.M,
 		Caught:      rec.Caught,
 	}
 	if !rec.Caught {
@@ -170,7 +175,7 @@ func KFromOmegaValue(x []bool, omega *BitFloat, m, maxBits, bound int) *KResult 
 	var prog []bool
 	var steps int
 	for _, p := range rec.Progs {
-		if len(p.P) > m {
+		if len(p.P) > rec.M {
 			continue
 		}
 		if !bitsEq(p.Out, x) {

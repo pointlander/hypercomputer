@@ -14,7 +14,7 @@ import (
 )
 
 func main() {
-	demo := flag.String("demo", "all", "bits, oracle, zeno, omega, arnn, newton, quantum, kcomplexity, chaitin, or all")
+	demo := flag.String("demo", "all", "bits, oracle, zeno, omega, arnn, newton, quantum, kcomplexity, chaitin, sweep, or all")
 	prec := flag.Uint("prec", 256, "mantissa precision in bits")
 	kstring := flag.String("kstring", "", "bit string for k-complexity (e.g. 1111)")
 	kbits := flag.Int("kbits", 12, "max U-program length for k-complexity search")
@@ -39,6 +39,8 @@ func main() {
 		demoKComplexity(*prec, *kstring, *kbits)
 	case "chaitin":
 		demoChaitin(*prec, *kstring, *kbits)
+	case "sweep":
+		demoSweep(*prec)
 	case "all":
 		demoBits(*prec)
 		demoOracle(*prec)
@@ -49,6 +51,7 @@ func main() {
 		demoQuantum(*prec)
 		demoKComplexity(*prec, *kstring, *kbits)
 		demoChaitin(*prec, *kstring, *kbits)
+		demoSweep(*prec)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown demo %q\n", *demo)
 		flag.Usage()
@@ -214,6 +217,14 @@ func demoQuantum(prec uint) {
 	tel := hc.Teleport(prec, func(c *hc.QCircuit) { c.X(0) })
 	_, p1 = tel.ProbQubit(2)
 	fmt.Printf("teleport |1⟩ → q2  P(q2=1)=%s\n", p1.Text('g', 12))
+	fmt.Println()
+}
+
+func demoSweep(prec uint) {
+	fmt.Println("== p,T resource sweep (analog Ω bits × dovetail bound) ==")
+	fmt.Println("entry = certified K_U, or >p if refused, or ? if Ω prefix not caught")
+	s := hc.SweepResources(nil, nil, nil, 0, prec)
+	fmt.Print(s)
 	fmt.Println()
 }
 
