@@ -14,7 +14,7 @@ import (
 )
 
 func main() {
-	demo := flag.String("demo", "all", "bits, oracle, zeno, omega, arnn, newton, quantum, kcomplexity, or all")
+	demo := flag.String("demo", "all", "bits, oracle, zeno, omega, arnn, newton, quantum, kcomplexity, chaitin, or all")
 	prec := flag.Uint("prec", 256, "mantissa precision in bits")
 	kstring := flag.String("kstring", "", "bit string for k-complexity (e.g. 1111)")
 	kbits := flag.Int("kbits", 12, "max U-program length for k-complexity search")
@@ -37,6 +37,8 @@ func main() {
 		demoQuantum(*prec)
 	case "kcomplexity":
 		demoKComplexity(*prec, *kstring, *kbits)
+	case "chaitin":
+		demoChaitin(*prec, *kstring, *kbits)
 	case "all":
 		demoBits(*prec)
 		demoOracle(*prec)
@@ -46,6 +48,7 @@ func main() {
 		demoNewton(*prec)
 		demoQuantum(*prec)
 		demoKComplexity(*prec, *kstring, *kbits)
+		demoChaitin(*prec, *kstring, *kbits)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown demo %q\n", *demo)
 		flag.Usage()
@@ -211,6 +214,49 @@ func demoQuantum(prec uint) {
 	tel := hc.Teleport(prec, func(c *hc.QCircuit) { c.X(0) })
 	_, p1 = tel.ProbQubit(2)
 	fmt.Printf("teleport |1⟩ → q2  P(q2=1)=%s\n", p1.Text('g', 12))
+	fmt.Println()
+}
+
+func demoChaitin(prec uint, kstring string, kbits int) {
+	fmt.Println("== Chaitin reconstruction of K_U from analog Ω ==")
+	if kbits < 1 {
+		kbits = 8
+	}
+	maxB := kbits
+	if kstring == "" && maxB < 9 {
+		maxB = 9
+	}
+	m := maxB
+	if m > 10 {
+		m = 10
+	}
+	om := hc.Omega(maxB, 256, prec)
+	bits, hat, steps := hc.OmegaPrefix(om, m)
+	fmt.Printf("Ω first %d bits = %s  (ω=%s, analog-shifts=%d)\n",
+		m, hc.FormatBits(bits), hat.Text('g', 12), steps)
+	rec := hc.Reconstruct(om, m, maxB, 256)
+	fmt.Printf("dovetail caught=%v stage=%d programs=%d sum=%s\n",
+		rec.Caught, rec.Stage, len(rec.Progs), rec.Sum.Text('g', 12))
+	run := func(s string, bitsM int) {
+		x := hc.ParseBitString(s)
+		r := hc.KFromOmegaValue(x, om, bitsM, maxB, 256)
+		fmt.Println(r)
+	}
+	if kstring != "" {
+		run(kstring, m)
+		if m > 1 {
+			fmt.Printf("one fewer Ω bit: ")
+			run(kstring, m-1)
+		}
+		fmt.Println()
+		return
+	}
+	run("", 3)
+	run("1", 6)
+	run("11", 9)
+	run("1", 5)
+	bad := hc.New(prec).Add(om, hc.FromRat(prec, 1, 2))
+	fmt.Println(hc.KFromOmegaValue(hc.ParseBitString("1"), bad, 6, maxB, 256))
 	fmt.Println()
 }
 

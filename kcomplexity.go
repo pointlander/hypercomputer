@@ -30,12 +30,18 @@ type KResult struct {
 	Queries     int
 	AnalogSteps uint64
 	AnalogOK    bool
+	OmegaBits   []bool
+	M           int
+	Caught      bool
 }
 
 func (r *KResult) String() string {
 	s := FormatBits(r.Bits)
 	if s == "" {
 		s = "ε"
+	}
+	if r.How == "chaitin" || r.How == "chaitin-beyond" || r.How == "chaitin-incomplete" {
+		return r.chaitinString(s)
 	}
 	if r.How != "" {
 		return fmt.Sprintf("K_U(%s)=%d  via %s  |p|=%d  p=%s",
