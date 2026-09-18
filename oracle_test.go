@@ -64,8 +64,8 @@ func TestHaltOracleMachineQuery(t *testing.T) {
 }
 
 func TestOmegaMonotone(t *testing.T) {
-	a := Omega(1, 2, 32, 256)
-	b := Omega(1, 4, 32, 256)
+	a := Omega(4, 64, 256)
+	b := Omega(8, 64, 256)
 	if b.Cmp(a) < 0 {
 		t.Fatalf("more programs should not decrease Ω: %s vs %s", a, b)
 	}

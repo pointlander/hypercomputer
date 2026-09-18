@@ -37,17 +37,8 @@ func CantorHaltOracle(nstates, bound int, prec uint) (oracle *BitFloat, halted [
 	return FromCantor(prec, halted), halted
 }
 
-// Omega approximates Chaitin's constant for a toy prefix-free
-// universal machine U:
-//
-//	programs are 1^n 0 followed by an n-bit TM index
-//	U runs that n-state-enumeration TM on a blank tape
-//	Ω_U = Σ { 2^{-|p|} : U(p)↓ }
-//
-// The inner TM is simulated for bound steps, so this is a left-
-// computable approximation. More bits of Ω decide more of the
-// halting problem (Levin–Chaitin).
-func Omega(nstates, maxN, bound int, prec uint) *BitFloat {
+// OmegaTM is the older Ω over n-state TM indices (1^n 0 + n-bit index).
+func OmegaTM(nstates, maxN, bound int, prec uint) *BitFloat {
 	if prec == 0 {
 		prec = PrecBits(2*maxN + 8)
 	}
@@ -62,6 +53,63 @@ func Omega(nstates, maxN, bound int, prec uint) *BitFloat {
 		for i := 0; i < limit; i++ {
 			h, _, _ := TMFromIndex(i, nstates).Run(bound)
 			if h {
+				omega.Add(omega, w)
+			}
+		}
+	}
+	return omega
+}
+
+// UHaltOracle encodes, as a binary real, whether each bit buffer of
+// length 1..maxBits is a complete prefix-free U-program that halts
+// in bound steps. Index is UBufferIndex(n, i).
+func UHaltOracle(maxBits, bound int, prec uint) (oracle *BitFloat, halted []bool) {
+	if maxBits < 1 {
+		maxBits = DefaultUMaxBits
+	}
+	if bound <= 0 {
+		bound = DefaultUBound
+	}
+	n := NumUBuffers(maxBits)
+	halted = make([]bool, n)
+	for nb := 1; nb <= maxBits; nb++ {
+		limit := 1 << nb
+		for i := 0; i < limit; i++ {
+			src := IntBits(nb, i)
+			res := RunU(src, bound)
+			halted[UBufferIndex(nb, i)] = res.Status == UHalt && res.Read == nb
+		}
+	}
+	if prec == 0 {
+		prec = PrecBits(n)
+	}
+	return FromBits(prec, halted), halted
+}
+
+// Omega approximates Chaitin's constant for the prefix-free machine U:
+//
+//	Ω_U = Σ { 2^{-|p|} : U(p)↓ }
+//
+// summed over complete programs of length 1..maxBits that halt within
+// bound steps. As maxBits, bound → ∞ this increases to Ω_U.
+func Omega(maxBits, bound int, prec uint) *BitFloat {
+	if maxBits < 1 {
+		maxBits = DefaultUMaxBits
+	}
+	if bound <= 0 {
+		bound = DefaultUBound
+	}
+	if prec == 0 {
+		prec = PrecBits(maxBits + 8)
+	}
+	omega := New(prec)
+	for n := 1; n <= maxBits; n++ {
+		w := Pow2(prec, -n)
+		limit := 1 << n
+		for i := 0; i < limit; i++ {
+			src := IntBits(n, i)
+			res := RunU(src, bound)
+			if res.Status == UHalt && res.Read == n {
 				omega.Add(omega, w)
 			}
 		}

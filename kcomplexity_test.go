@@ -51,7 +51,7 @@ func TestAnalogOutputMatchesDiscrete(t *testing.T) {
 }
 
 func TestKEmptyAndOne(t *testing.T) {
-	empty := KComplexity(nil, 1, 32, 128)
+	empty := KComplexityTM(nil, 1, 32, 128)
 	if empty.ByPrint {
 		t.Fatalf("empty string should have a 1-state TM: %s", empty)
 	}
@@ -61,7 +61,7 @@ func TestKEmptyAndOne(t *testing.T) {
 	if !empty.AnalogOK {
 		t.Fatal("analog witness failed for ε")
 	}
-	one := KComplexity(ParseBitString("1"), 1, 32, 128)
+	one := KComplexityTM(ParseBitString("1"), 1, 32, 128)
 	if one.ByPrint {
 		t.Fatalf("\"1\" should have a 1-state TM: %s", one)
 	}
@@ -72,7 +72,7 @@ func TestKEmptyAndOne(t *testing.T) {
 
 func TestKIncompressibleUsesPrint(t *testing.T) {
 	x := ParseBitString("1011001110001010")
-	r := KComplexity(x, 1, 32, 128)
+	r := KComplexityTM(x, 1, 32, 128)
 	if !r.ByPrint {
 		t.Fatalf("1-state TMs cannot emit a 16-bit string, got %s", r)
 	}
@@ -86,7 +86,7 @@ func TestKIncompressibleUsesPrint(t *testing.T) {
 
 func TestK1111TwoState(t *testing.T) {
 	x := ParseBitString("1111")
-	r := KComplexity(x, 2, 32, 256)
+	r := KComplexityTM(x, 2, 32, 256)
 	if r.TMIndex < 0 {
 		t.Fatalf("no 2-state TM for 1111: %s", r)
 	}
@@ -110,7 +110,7 @@ func TestK1111TwoState(t *testing.T) {
 
 func TestKNeverExceedsPrint(t *testing.T) {
 	for _, s := range []string{"", "0", "1", "11", "101", "1111"} {
-		r := KComplexity(ParseBitString(s), 1, 16, 64)
+		r := KComplexityTM(ParseBitString(s), 1, 16, 64)
 		if r.K > r.PrintBound {
 			t.Fatalf("%s: K=%d print=%d", s, r.K, r.PrintBound)
 		}

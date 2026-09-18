@@ -18,6 +18,7 @@
 //   - Turing machines with analog (Cantor-stack) tapes
 //   - a Zeno / accelerated machine that takes step n in time 2^{-n}
 //   - halt-set and Chaitin Ω oracles encoded as reals
+//   - a prefix-free reference machine U shared by Ω_U and K_U
 //   - an analog recurrent net that reads a Cantor-encoded oracle
 //   - a state-vector quantum circuit simulator over BitFloat complexes
 //   - Kolmogorov complexity of bit strings via the analog halt oracle

@@ -8,17 +8,16 @@ import "fmt"
 
 const analogISAQueryLimit = 64
 
-// KResult is Kolmogorov complexity of a bit string relative to the
-// n-state TM enumeration, computed with the analog halt oracle.
+// KResult is Kolmogorov complexity of a bit string.
 //
-// Plain C_U(x) is the bit-length of the smallest TM index whose machine
-// outputs x. Prefix-free K_U matches the Ω program format 1^n 0 + n-bit
-// index. PrintBound is the trivial program |x|+1 (a tag bit plus x).
-// K is min(C_U, PrintBound). With a finite step bound this is K^T ≥ K;
-// as bound and oracle precision → ∞ it decreases to true C_U.
+// For KComplexity this is K_U relative to the prefix-free machine U
+// (same U as Ω). For KComplexityTM it is complexity in the n-state
+// TM enumeration (legacy).
 type KResult struct {
 	Bits        []bool
 	K           int
+	Program     []bool
+	How         string
 	PlainC      int
 	PrefixK     int
 	PrintBound  int
@@ -27,6 +26,7 @@ type KResult struct {
 	TMStates    int
 	TMSteps     int
 	Bound       int
+	MaxBits     int
 	Queries     int
 	AnalogSteps uint64
 	AnalogOK    bool
@@ -36,6 +36,10 @@ func (r *KResult) String() string {
 	s := FormatBits(r.Bits)
 	if s == "" {
 		s = "ε"
+	}
+	if r.How != "" {
+		return fmt.Sprintf("K_U(%s)=%d  via %s  |p|=%d  p=%s",
+			s, r.K, r.How, len(r.Program), FormatBits(r.Program))
 	}
 	how := "print"
 	if !r.ByPrint {
@@ -137,9 +141,139 @@ func oracleHalt(m *Machine, oracle *BitFloat, index int, isa bool) (bool, uint64
 	return b == 1, uint64(index + 1), err
 }
 
-// KComplexity computes Kolmogorov complexity of x using the analog
+func considerU(x, p []bool, bound int, how string, best *KResult) {
+	if len(p) == 0 || (best.K >= 0 && len(p) >= best.K) {
+		return
+	}
+	res := RunU(p, bound)
+	if res.Status != UHalt || res.Read != len(p) || !bitsEq(res.Out, x) {
+		return
+	}
+	best.K = len(p)
+	best.Program = append([]bool(nil), p...)
+	best.How = how
+	best.TMSteps = res.Steps
+}
+
+// KComplexity computes K_U(x) for the prefix-free machine U (the same
+// U as Omega). Listing and unary-repeat templates are always tried;
+// programs of length 1..maxBits are then searched via the analog halt
+// oracle. Finite bound and maxBits give K^T ≥ K_U.
+func KComplexity(x []bool, maxBits, bound int, prec uint) *KResult {
+	if maxBits < 1 {
+		maxBits = DefaultUMaxBits
+	}
+	if bound <= 0 {
+		bound = DefaultUBound
+	}
+	listing := ListingProgram(x)
+	r := &KResult{
+		Bits:    append([]bool(nil), x...),
+		K:       -1,
+		Bound:   bound,
+		MaxBits: maxBits,
+	}
+	considerU(x, listing, bound, "listing", r)
+	if bit, k, ok := unaryRun(x); ok {
+		considerU(x, RepeatProgram(bit, k), bound, "repeat", r)
+	}
+	searchTo := maxBits
+	if r.K >= 0 && r.K-1 < searchTo {
+		searchTo = r.K - 1
+	}
+	oprec := PrecBits(NumUBuffers(maxBits))
+	if prec > oprec {
+		oprec = prec
+	}
+	oracle, halted := UHaltOracle(maxBits, bound, oprec)
+	m := NewMachine(oracle.Prec(), 8)
+	if err := m.Load(0, oracle); err != nil {
+		panic(err)
+	}
+	isa := NumUBuffers(maxBits) <= analogISAQueryLimit
+	for n := 1; n <= searchTo; n++ {
+		if r.K >= 0 && n >= r.K {
+			break
+		}
+		for i := 0; i < 1<<n; i++ {
+			r.Queries++
+			idx := UBufferIndex(n, i)
+			var halt bool
+			if isa {
+				h, steps, err := oracleHalt(m, oracle, idx, true)
+				if err != nil {
+					panic(err)
+				}
+				r.AnalogSteps += steps
+				halt = h
+				if halt != halted[idx] {
+					panic(fmt.Sprintf("U oracle bit %d disagrees with table", idx))
+				}
+			} else {
+				halt = halted[idx]
+			}
+			if !halt {
+				continue
+			}
+			src := IntBits(n, i)
+			res := RunU(src, bound)
+			if res.Status != UHalt || res.Read != n || !bitsEq(res.Out, x) {
+				continue
+			}
+			r.K = n
+			r.Program = src
+			r.How = "search"
+			r.TMSteps = res.Steps
+			r.AnalogOK = analogWitness(m, halted, n, i, isa, r)
+			return r
+		}
+	}
+	if r.Program != nil && len(r.Program) <= maxBits {
+		n := len(r.Program)
+		r.AnalogOK = analogWitness(m, halted, n, bitsInt(r.Program), false, r)
+	}
+	return r
+}
+
+func analogWitness(m *Machine, halted []bool, n, i int, counted bool, r *KResult) bool {
+	idx := UBufferIndex(n, i)
+	if idx < 0 || idx >= len(halted) || !halted[idx] {
+		return false
+	}
+	bit, err := m.QueryBit(0, idx)
+	if !counted {
+		r.AnalogSteps += uint64(idx + 1)
+	}
+	return err == nil && bit == 1
+}
+
+func unaryRun(x []bool) (bit bool, k int, ok bool) {
+	if len(x) == 0 {
+		return false, 0, false
+	}
+	b := x[0]
+	for _, v := range x {
+		if v != b {
+			return false, 0, false
+		}
+	}
+	return b, len(x), true
+}
+
+func bitsInt(b []bool) int {
+	n := 0
+	for _, v := range b {
+		n <<= 1
+		if v {
+			n |= 1
+		}
+	}
+	return n
+}
+
+// KComplexityTM computes Kolmogorov complexity of x using the analog
 // halt oracle of n-state 2-symbol TMs simulated for bound steps.
-func KComplexity(x []bool, nstates, bound int, prec uint) *KResult {
+func KComplexityTM(x []bool, nstates, bound int, prec uint) *KResult {
 	if nstates < 1 {
 		nstates = 1
 	}

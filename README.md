@@ -15,6 +15,7 @@ The numeric type is a `big.Rat` with an analog bit API. On top of it:
 - 2-symbol Turing machines with analog Cantor-stack tapes
 - a Zeno machine (step `n` takes time `2^{-(n+1)}`)
 - bounded halt-set and Chaitin Ω oracles encoded as reals
+- a prefix-free reference machine U shared by Ω_U and K_U
 - an analog recurrent net that pops a Cantor-encoded oracle
 - a state-vector quantum circuit simulator (Clifford+T, rotations, QFT)
 - Kolmogorov complexity of a bit string via the analog halt oracle
@@ -30,5 +31,5 @@ is visible.
 go test ./...
 go run ./cmd/hypercomputer -demo=all -prec=256
 go run ./cmd/hypercomputer -demo=quantum -prec=256
-go run ./cmd/hypercomputer -demo=kcomplexity -kstring=1111 -kstates=2
+go run ./cmd/hypercomputer -demo=kcomplexity -kstring=1111 -kbits=12
 ```

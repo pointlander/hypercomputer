@@ -17,7 +17,7 @@ func main() {
 	demo := flag.String("demo", "all", "bits, oracle, zeno, omega, arnn, newton, quantum, kcomplexity, or all")
 	prec := flag.Uint("prec", 256, "mantissa precision in bits")
 	kstring := flag.String("kstring", "", "bit string for k-complexity (e.g. 1111)")
-	kstates := flag.Int("kstates", 1, "n-state TM family for k-complexity")
+	kbits := flag.Int("kbits", 12, "max U-program length for k-complexity search")
 	flag.Parse()
 
 	switch *demo {
@@ -36,7 +36,7 @@ func main() {
 	case "quantum":
 		demoQuantum(*prec)
 	case "kcomplexity":
-		demoKComplexity(*prec, *kstring, *kstates)
+		demoKComplexity(*prec, *kstring, *kbits)
 	case "all":
 		demoBits(*prec)
 		demoOracle(*prec)
@@ -45,7 +45,7 @@ func main() {
 		demoARNN(*prec)
 		demoNewton(*prec)
 		demoQuantum(*prec)
-		demoKComplexity(*prec, *kstring, *kstates)
+		demoKComplexity(*prec, *kstring, *kbits)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown demo %q\n", *demo)
 		flag.Usage()
@@ -142,10 +142,10 @@ func demoZeno(prec uint) {
 }
 
 func demoOmega(prec uint) {
-	fmt.Println("== Chaitin Ω approximation ==")
-	for _, n := range []int{2, 4, 6} {
-		w := hc.Omega(1, n, 32, prec)
-		fmt.Printf("max index bits %d: Ω ≈ %s\n", n, w.Text('g', 24))
+	fmt.Println("== Chaitin Ω_U (prefix-free U) ==")
+	for _, n := range []int{4, 6, 8} {
+		w := hc.Omega(n, 256, prec)
+		fmt.Printf("|p|≤%d: Ω ≈ %s\n", n, w.Text('g', 24))
 	}
 	fmt.Println()
 }
@@ -214,33 +214,28 @@ func demoQuantum(prec uint) {
 	fmt.Println()
 }
 
-func demoKComplexity(prec uint, kstring string, kstates int) {
-	fmt.Println("== Kolmogorov complexity (analog halt oracle) ==")
-	if kstates < 1 {
-		kstates = 1
+func demoKComplexity(prec uint, kstring string, kbits int) {
+	fmt.Println("== K_U via prefix-free U (same U as Ω) ==")
+	if kbits < 1 {
+		kbits = 12
 	}
-	run := func(s string, nstates int) {
+	run := func(s string) {
 		x := hc.ParseBitString(s)
-		r := hc.KComplexity(x, nstates, 32, prec)
+		r := hc.KComplexity(x, kbits, 256, prec)
 		fmt.Println(r)
 		if r.AnalogOK {
-			fmt.Printf("  analog TM witness tape matches, oracle queries=%d analog-steps=%d\n",
+			fmt.Printf("  analog oracle agrees, queries=%d analog-steps=%d\n",
 				r.Queries, r.AnalogSteps)
-		} else if !r.ByPrint {
-			fmt.Printf("  analog witness mismatch, queries=%d\n", r.Queries)
 		}
 	}
 	if kstring != "" {
-		run(kstring, kstates)
+		run(kstring)
 		fmt.Println()
 		return
 	}
-	for _, s := range []string{"", "1", "11", "101", "1111"} {
-		run(s, 1)
+	for _, s := range []string{"", "0", "1", "11", "101", "1111", "1111111111111111"} {
+		run(s)
 	}
-	fmt.Println("2-state family:")
-	run("1", 2)
-	run("1111", 2)
 	fmt.Println()
 }
 
