@@ -16,7 +16,8 @@
 //
 //   - a BSS-style real register machine
 //   - Turing machines with analog (Cantor-stack) tapes
-//   - a Zeno / accelerated machine that takes step n in time 2^{-n}
+//   - a Zeno / accelerated machine that takes step n in time 2^{-n},
+//     with an ω-limit (halt, Cauchy tape, or diverge)
 //   - halt-set and Chaitin Ω oracles encoded as reals
 //   - a prefix-free reference machine U shared by Ω_U and K_U
 //   - an analog recurrent net that reads a Cantor-encoded oracle

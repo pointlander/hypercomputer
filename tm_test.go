@@ -25,8 +25,8 @@ func TestBusyBeaver2(t *testing.T) {
 func TestAnalogMatchesDiscrete(t *testing.T) {
 	tms := []*TM{
 		BusyBeaver2(),
-		paintRight(),
-		writeOneHalt(),
+		PaintRight(),
+		WriteOneHalt(),
 	}
 	for i, tm := range tms {
 		d := &Config{State: tm.Start, Tape: make(map[int]int)}
@@ -53,28 +53,8 @@ func TestAnalogMatchesDiscrete(t *testing.T) {
 	}
 }
 
-func paintRight() *TM {
-	return &TM{
-		States: 1,
-		Start:  0,
-		Delta: [][2]Transition{
-			{{Write: 1, Move: 1, Next: 0}, {Write: 1, Move: 1, Next: 0}},
-		},
-	}
-}
-
-func writeOneHalt() *TM {
-	return &TM{
-		States: 1,
-		Start:  0,
-		Delta: [][2]Transition{
-			{{Write: 1, Move: 1, Next: Halt}, {Write: 1, Move: 1, Next: Halt}},
-		},
-	}
-}
-
 func TestZenoHaltingFreezes(t *testing.T) {
-	z := NewZeno(256, writeOneHalt())
+	z := NewZeno(256, WriteOneHalt())
 	z.Run(32)
 	if !z.Halted() {
 		t.Fatal("should halt")
@@ -91,7 +71,7 @@ func TestZenoHaltingFreezes(t *testing.T) {
 }
 
 func TestZenoNonHaltingKeepsWriting(t *testing.T) {
-	z := NewZeno(512, paintRight())
+	z := NewZeno(512, PaintRight())
 	z.Run(8)
 	if z.Halted() {
 		t.Fatal("paint should not halt")
@@ -111,7 +91,7 @@ func TestZenoNonHaltingKeepsWriting(t *testing.T) {
 }
 
 func TestZenoTimeApproachesOne(t *testing.T) {
-	z := NewZeno(256, paintRight())
+	z := NewZeno(256, PaintRight())
 	z.Run(40)
 	one := FromInt(256, 1)
 	if !z.Time.ApproxEq(one, 40) {

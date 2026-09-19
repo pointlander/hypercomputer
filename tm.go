@@ -137,6 +137,40 @@ func BusyBeaver2() *TM {
 	}
 }
 
+// PaintRight writes 1, moves right, and never halts.
+func PaintRight() *TM {
+	return &TM{
+		States: 1,
+		Start:  0,
+		Delta: [][2]Transition{
+			{{Write: 1, Move: 1, Next: 0}, {Write: 1, Move: 1, Next: 0}},
+		},
+	}
+}
+
+// IdleBlank writes 0, moves right, and never halts. On a blank tape
+// both Cantor stacks stay 1/3: a Cauchy limit without a halt state.
+func IdleBlank() *TM {
+	return &TM{
+		States: 1,
+		Start:  0,
+		Delta: [][2]Transition{
+			{{Write: 0, Move: 1, Next: 0}, {Write: 0, Move: 1, Next: 0}},
+		},
+	}
+}
+
+// WriteOneHalt writes a single 1 and halts.
+func WriteOneHalt() *TM {
+	return &TM{
+		States: 1,
+		Start:  0,
+		Delta: [][2]Transition{
+			{{Write: 1, Move: 1, Next: Halt}, {Write: 1, Move: 1, Next: Halt}},
+		},
+	}
+}
+
 // Step applies one transition. It returns false if the machine is halted.
 func (tm *TM) Step(c *Config) bool {
 	if c.State < 0 {
@@ -315,44 +349,4 @@ func (a *AnalogTM) Output(span int) []bool {
 		out[d-min] = a.TapeBit(d) == 1
 	}
 	return out
-}
-
-// Zeno is an accelerated Turing machine: step n is allotted time
-// 2^{-(n+1)}, so ω discrete steps complete in analog time 1.
-// The configuration is an analog real pair; the limit as steps → ∞
-// (precision permitting) is the supertask result.
-type Zeno struct {
-	Analog *AnalogTM
-	Time   *BitFloat
-	Steps  int
-}
-
-// NewZeno returns a Zeno machine for tm.
-func NewZeno(prec uint, tm *TM) *Zeno {
-	return &Zeno{
-		Analog: NewAnalogTM(prec, tm),
-		Time:   New(prec),
-	}
-}
-
-// Run performs up to n accelerated steps. Once the TM halts the
-// analog configuration freezes; time still records the partial sum
-// of 1/2 + 1/4 + ... used so far.
-func (z *Zeno) Run(n int) {
-	dt := FromRat(z.Analog.Prec, 1, 2)
-	half := FromRat(z.Analog.Prec, 1, 2)
-	for i := 0; i < n; i++ {
-		running := z.Analog.Step()
-		z.Time.Add(z.Time, dt)
-		dt.Mul(dt, half)
-		z.Steps++
-		if !running {
-			return
-		}
-	}
-}
-
-// Halted reports whether the inner TM has halted.
-func (z *Zeno) Halted() bool {
-	return z.Analog.Halted()
 }

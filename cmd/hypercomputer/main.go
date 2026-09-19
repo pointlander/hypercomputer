@@ -123,27 +123,21 @@ func demoOracle(prec uint) {
 }
 
 func demoZeno(prec uint) {
-	fmt.Println("== Zeno machine (accelerated TM) ==")
-	bb := hc.BusyBeaver2()
-	z := hc.NewZeno(prec, bb)
-	z.Run(32)
-	fmt.Printf("BB(2): halted=%v steps=%d analog-time=%s\n", z.Halted(), z.Steps, z.Time.Text('g', 20))
-	var ones []byte
-	for d := -8; d <= 8; d++ {
-		ones = append(ones, byte('0'+z.Analog.TapeBit(d)))
+	fmt.Println("== Zeno ω-limit (doubling n=1,2,…,2^k) ==")
+	k := 5
+	type row struct {
+		name string
+		tm   *hc.TM
 	}
-	fmt.Printf("analog tape around head: %s (head at offset 0)\n", ones)
-
-	paint := &hc.TM{
-		States: 1,
-		Start:  0,
-		Delta: [][2]hc.Transition{
-			{{Write: 1, Move: 1, Next: 0}, {Write: 1, Move: 1, Next: 0}},
-		},
+	for _, r := range []row{
+		{"BB(2)", hc.BusyBeaver2()},
+		{"write-1", hc.WriteOneHalt()},
+		{"idle", hc.IdleBlank()},
+		{"paint", hc.PaintRight()},
+	} {
+		lim := hc.NewZeno(prec, r.tm).Limit(k)
+		fmt.Printf("%-8s %s\n", r.name, lim)
 	}
-	z2 := hc.NewZeno(prec, paint)
-	z2.Run(24)
-	fmt.Printf("non-halting paint: halted=%v steps=%d time→%s\n", z2.Halted(), z2.Steps, z2.Time.Text('g', 20))
 	fmt.Println()
 }
 

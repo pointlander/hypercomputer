@@ -27,7 +27,7 @@ func TestTMIndexRoundtrip(t *testing.T) {
 }
 
 func TestTapeOutput(t *testing.T) {
-	_, _, cfg := writeOneHalt().Run(8)
+	_, _, cfg := WriteOneHalt().Run(8)
 	if FormatBits(cfg.Output()) != "1" {
 		t.Fatalf("write-one output %q", FormatBits(cfg.Output()))
 	}
