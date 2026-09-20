@@ -1,0 +1,5 @@
+name = "hyperuniverse"
+defaultTargets = ["Hyperuniverse"]
+
+[[lean_lib]]
+name = "Hyperuniverse"

@@ -3,3 +3,5 @@
 *.png
 *.out
 *.test
+lean/.lake
+lean/lake-manifest.json

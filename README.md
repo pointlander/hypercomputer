@@ -38,3 +38,15 @@ go run ./cmd/hypercomputer -demo=kcomplexity -kstring=1111 -kbits=12
 go run ./cmd/hypercomputer -demo=chaitin -kbits=8
 go run ./cmd/hypercomputer -demo=sweep
 ```
+
+## Lean theory
+
+`lean/Hyperuniverse.lean` is an axiomatic theory in which the universe is a
+hypercomputer, a particle is a computational system with an infinite bit
+store, and decay reads that store at the particle's query address — solving
+one instance of the halting problem (equivalently: the Zeno ω-limit of the
+internal machine).
+
+```bash
+cd lean && lake build
+```
