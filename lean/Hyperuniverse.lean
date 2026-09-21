@@ -7,7 +7,8 @@
 
   The universe is a classical halt oracle. A particle carries an infinite
   store; decay reads cell 0. When `machine = query`, that bit is the
-  ω-limit halt bit of the internal TM.
+  ω-limit halt bit of the internal TM. A truncated `N`-bit lab particle
+  decides `Halts` exactly on coded queries `< N`.
 -/
 
 namespace Hyperuniverse
@@ -460,4 +461,99 @@ theorem cosmos_eq_zeno (tm : TM) :
     cosmos.oracle tm = true ↔ ∃ k, zenoLimitK tm k = LimitKind.halt := by
   rw [cosmos.correct, Halts_iff_zeno_eventually_halt]
 
+/-! ## 5. Truncated particles (finite-\(p\) laboratory) -/
+
+/-- The first `N` cells of two stores agree. -/
+def prefixEq (s t : Store) (N : Nat) : Prop :=
+  ∀ n, n < N → s n = t n
+
+/-- Zero the tail: an `N`-bit analog tape. -/
+def truncateStore (s : Store) (N : Nat) : Store :=
+  fun n => if n < N then s n else false
+
+theorem truncateStore_prefix (s : Store) (N : Nat) :
+    prefixEq (truncateStore s N) s N := by
+  intro n hn
+  simp [truncateStore, hn]
+
+theorem truncateStore_tail (s : Store) (N n : Nat) (hn : N ≤ n) :
+    truncateStore s N n = false := by
+  simp [truncateStore, Nat.not_lt.mpr hn]
+
+theorem truncateStore_finite (s : Store) (N : Nat) :
+    FiniteSupport (truncateStore s N) :=
+  ⟨N, fun n hn => truncateStore_tail s N n hn⟩
+
+/-- A laboratory particle: the query is a program *code*, read at
+    that address on the store. -/
+structure LabParticle where
+  machine : TM
+  store : Store
+  query : Nat
+
+/-- Decay reads the store at the query index (finite-\(p\) readout). -/
+def labDecay (p : LabParticle) : Decay :=
+  Decay.ofBool (p.store p.query)
+
+/-- The store matches `haltStore` on cells `0 .. N-1`. -/
+class Truncated (p : LabParticle) (N : Nat) : Prop where
+  agree : prefixEq p.store haltStore N
+
+/-- Infinite-\(p\) lab particle: full `haltStore`. -/
+def labParticleFor (e : Nat) : LabParticle :=
+  { machine := decode e, store := haltStore, query := e }
+
+/-- Finite-\(p\) particle: `haltStore` truncated to `N` bits. -/
+def truncatedParticle (e N : Nat) : LabParticle :=
+  { machine := decode e, store := truncateStore haltStore N, query := e }
+
+instance (e N : Nat) : Truncated (truncatedParticle e N) N where
+  agree := truncateStore_prefix haltStore N
+
+theorem truncatedParticle_finite (e N : Nat) :
+    FiniteSupport (truncatedParticle e N).store :=
+  truncateStore_finite haltStore N
+
+/-- In range, decay decides `Halts` on the coded query. -/
+theorem truncated_sound {p : LabParticle} {N : Nat} [hp : Truncated p N]
+    (h : p.query < N) :
+    labDecay p = .yes ↔ Halts (decode p.query) := by
+  have heq : p.store p.query = haltStore p.query := hp.agree p.query h
+  simp [labDecay, heq, haltStore_spec]
+
+theorem truncatedParticle_sound (e N : Nat) (h : e < N) :
+    labDecay (truncatedParticle e N) = .yes ↔ Halts (decode e) :=
+  truncated_sound (p := truncatedParticle e N) h
+
+/-- Out of range, a truncated tape reads `false` even if the program
+    actually halts. -/
+theorem truncatedParticle_out_of_range (e N : Nat) (he : N ≤ e) :
+    labDecay (truncatedParticle e N) = .no := by
+  simp [labDecay, truncatedParticle, truncateStore, Nat.not_lt.mpr he,
+    Decay.ofBool]
+
+/-- `N = 0`: no query is in range. -/
+theorem truncated_zero_no_query (e : Nat) :
+    ¬ e < 0 :=
+  Nat.not_lt_zero e
+
+/-- There is always a halting query the `N`-bit tape misses. -/
+theorem truncated_misses_a_halter (N : Nat) :
+    ∃ e, N ≤ e ∧ Halts (decode e) ∧
+      labDecay (truncatedParticle e N) = .no := by
+  obtain ⟨e, he, hH⟩ := infinitely_many_halt N
+  exact ⟨e, he, hH, truncatedParticle_out_of_range e N he⟩
+
+/-- One extra analog bit decides a previously truncated halter:
+    code `2N` is missed at depth `2N` and certified at depth `2N+1`. -/
+theorem extra_bit_certifies (N : Nat) :
+    labDecay (truncatedParticle (2 * N) (2 * N + 1)) = .yes ∧
+      labDecay (truncatedParticle (2 * N) (2 * N)) = .no := by
+  constructor
+  · have : 2 * N < 2 * N + 1 := Nat.lt_succ_self _
+    have hH : Halts (decode (2 * N)) := by simpa [decode_even] using haltNow_halts
+    exact (truncatedParticle_sound (2 * N) (2 * N + 1) this).mpr hH
+  · exact truncatedParticle_out_of_range (2 * N) (2 * N) (Nat.le_refl _)
+
 end Hyperuniverse
+
