@@ -41,11 +41,13 @@ go run ./cmd/hypercomputer -demo=sweep
 
 ## Lean theory
 
-`lean/Hyperuniverse.lean` is an axiomatic theory in which the universe is a
-hypercomputer, a particle is a computational system with an infinite bit
-store, and decay reads that store at the particle's query address — solving
-one instance of the halting problem (equivalently: the Zeno ω-limit of the
-internal machine).
+`lean/Hyperuniverse.lean` models a universe whose machines are finite
+enumerated Turing tables. A particle stores infinitely many bits, and
+decay reads the halt bit of its query (the Zeno ω-limit of that machine).
+`Computable` means some finite table writes the bit function: parity is a
+theorem, and `no_TM_decides_Halt` places the enumerated halt bit outside
+`Computable`. A truncated `N`-bit lab particle decides `Halts` on coded
+queries `< N`.
 
 ```bash
 cd lean && lake build
