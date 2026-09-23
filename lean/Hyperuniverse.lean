@@ -493,6 +493,63 @@ theorem zenoLimitK_paint_ne_halt (k : Nat) :
   have := (zenoLimitK_eq_halt_iff paintRight k).mp h
   simp [zenoEnd, paint_run_state] at this
 
+/-- Leftmost cell of the head-centered window after `n` paint steps.
+    The painted block is `[0, n)`, so that cell is set exactly when the
+    head has travelled at least `span` squares. -/
+theorem paint_window_left (n span : Nat) (hspan : 0 < span) :
+    (window (run paintRight n (Config.init paintRight)) span)[0]? =
+      some (decide (span ≤ n)) := by
+  have hi : 0 < 2 * span + 1 := Nat.succ_pos _
+  unfold window
+  rw [List.getElem?_map, List.getElem?_range hi]
+  simp [paint_run_head]
+  have hj : (n : Int) + -(span : Int) = (n : Int) - (span : Int) := by omega
+  have hiff :
+      (0 ≤ (n : Int) + -(span : Int) ∧ (n : Int) + -(span : Int) < (n : Int)) ↔
+        span ≤ n := by
+    rw [hj]
+    constructor
+    · intro ⟨hle, _⟩
+      exact Int.ofNat_le.mp (Int.sub_nonneg.mp hle)
+    · intro hle
+      refine ⟨Int.sub_nonneg.mpr (by exact_mod_cast hle), ?_⟩
+      have : (0 : Int) < (span : Int) := by exact_mod_cast hspan
+      omega
+  by_cases hsn : span ≤ n
+  · have ht :
+        (run paintRight n (Config.init paintRight)).tape ((n : Int) + -(span : Int)) = true :=
+      (paint_run_tape n _).mpr (hiff.mpr hsn)
+    simp [ht, hsn]
+  · have ht :
+        (run paintRight n (Config.init paintRight)).tape ((n : Int) + -(span : Int)) = false := by
+      apply Bool.eq_false_iff.mpr
+      intro htrue
+      exact hsn (hiff.mp ((paint_run_tape n _).mp htrue))
+    simp [ht, hsn]
+
+theorem zenoLimitK_paint (k : Nat) : zenoLimitK paintRight k = LimitKind.diverge := by
+  have hk : 0 < zenoK k := by
+    cases k with
+    | zero => unfold zenoK; decide
+    | succ k =>
+      simp [zenoK, Nat.max_eq_left (Nat.succ_le_succ (Nat.zero_le k))]
+  have hspan : 0 < 2 ^ zenoK k := Nat.two_pow_pos _
+  have hfar : ¬ 2 ^ zenoK k ≤ 2 ^ (zenoK k - 1) :=
+    Nat.not_le_of_gt (Nat.two_pow_pred_lt_two_pow hk)
+  have hne : window (zenoMid paintRight k) (2 ^ zenoK k) ≠
+      window (zenoEnd paintRight k) (2 ^ zenoK k) := by
+    intro heq
+    have hget := congrArg (fun l : List Bool => l[0]?) heq
+    rw [zenoMid, zenoEnd, paint_window_left _ _ hspan, paint_window_left _ _ hspan] at hget
+    simp [hfar] at hget
+  have hstate : ((zenoMid paintRight k).state == (zenoEnd paintRight k).state) = true := by
+    simp [zenoMid, zenoEnd, paint_run_state]
+  have hf : zenoFrozenB paintRight k = false := by
+    simp [zenoFrozenB, hstate, beq_eq_false_iff_ne.mpr hne]
+  have hnot : (zenoEnd paintRight k).state.isNone = false := by
+    simp [zenoEnd, paint_run_state]
+  simp [zenoLimitK, hnot, hf]
+
 /-! ## 4. Particles, cosmos, decay -/
 
 structure ComputationalSystem where
