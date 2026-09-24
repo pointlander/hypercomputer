@@ -2,8 +2,9 @@
   Hyperuniverse.lean
   ──────────────────────────────────────────────────────────────────────────
   Finite 2-symbol tables (`TMFromIndex` / `decode`), `step` / `run`, and
-  `Halts`. The Zeno ω-limit compares the tape window at 2^{k-1} and 2^k
-  (halt / Cauchy / diverge).
+  `Halts`. A code is `n + 1 = 2^{s-1} · (2i+1)`: every state count `s ≥ 1`
+  occurs, and `i` selects the table. The Zeno ω-limit compares the tape
+  window at 2^{k-1} and 2^k (halt / Cauchy / diverge).
 
   `Computable` means some finite table writes the bit function on a unary
   tape. Parity is computable. `haltStore` is the halt bit of `decode`;
@@ -259,52 +260,154 @@ def TMFromIndex (index nstates : Nat) : TM where
   table := List.ofFn fun (slot : Fin (numSlots nstates)) =>
     decodeTrans ((index / transRadix nstates ^ slot.val) % transRadix nstates) nstates
 
-/-- Eight state-counts `1..8`, index in the high bits (mod table size). -/
-def nstatesOf (n : Nat) : Nat := n % 8 + 1
-def indexOf (n : Nat) : Nat := n / 8
-
 def numTMs (nstates : Nat) : Nat :=
   transRadix nstates ^ numSlots nstates
 
+/-- Number of trailing factors of two. `twoVal 0 = 0`. -/
+def twoVal (n : Nat) : Nat :=
+  if n = 0 then 0
+  else if n % 2 = 0 then twoVal (n / 2) + 1 else 0
+termination_by n
+decreasing_by
+  apply Nat.div_lt_self
+  · exact Nat.pos_of_ne_zero (by assumption)
+  · decide
+
+/-- Odd part of `n`: divide out every factor of two. -/
+def oddPart (n : Nat) : Nat :=
+  if n = 0 then 0
+  else if n % 2 = 0 then oddPart (n / 2) else n
+termination_by n
+decreasing_by
+  apply Nat.div_lt_self
+  · exact Nat.pos_of_ne_zero (by assumption)
+  · decide
+
+theorem twoVal_odd (m : Nat) (hm : m % 2 = 1) : twoVal m = 0 := by
+  have hne : m ≠ 0 := by
+    intro h
+    simp [h] at hm
+  unfold twoVal
+  simp [hne, hm]
+
+theorem twoVal_two_mul (m : Nat) (hm : 0 < m) : twoVal (2 * m) = twoVal m + 1 := by
+  have hne : 2 * m ≠ 0 := Nat.ne_of_gt (Nat.mul_pos (by decide) hm)
+  have hmod : (2 * m) % 2 = 0 := Nat.mul_mod_right 2 m
+  have hdiv : 2 * m / 2 = m := Nat.mul_div_cancel_left m (by decide)
+  conv =>
+    lhs
+    unfold twoVal
+  simp [hne, hmod, hdiv]
+
+theorem oddPart_odd (m : Nat) (hm : m % 2 = 1) : oddPart m = m := by
+  have hne : m ≠ 0 := by
+    intro h
+    simp [h] at hm
+  unfold oddPart
+  simp [hne, hm]
+
+theorem oddPart_two_mul (m : Nat) (hm : 0 < m) : oddPart (2 * m) = oddPart m := by
+  have hne : 2 * m ≠ 0 := Nat.ne_of_gt (Nat.mul_pos (by decide) hm)
+  have hmod : (2 * m) % 2 = 0 := Nat.mul_mod_right 2 m
+  have hdiv : 2 * m / 2 = m := Nat.mul_div_cancel_left m (by decide)
+  conv =>
+    lhs
+    unfold oddPart
+  simp [hne, hmod, hdiv]
+
+theorem mod_two_succ_even (i : Nat) : (2 * i + 1) % 2 = 1 := by
+  rw [Nat.mul_add_mod_self_left]
+
+theorem twoVal_mul_pow (a odd : Nat) (hodd : odd % 2 = 1) :
+    twoVal (2 ^ a * odd) = a := by
+  have hoddpos : 0 < odd := by omega
+  induction a with
+  | zero =>
+    simp
+    exact twoVal_odd odd hodd
+  | succ a ih =>
+    have hrewrite : 2 ^ (a + 1) * odd = 2 * (2 ^ a * odd) := by
+      rw [Nat.pow_succ, Nat.mul_assoc, Nat.mul_comm 2 odd, ← Nat.mul_assoc, Nat.mul_comm]
+    rw [hrewrite, twoVal_two_mul _ (Nat.mul_pos (Nat.two_pow_pos _) hoddpos), ih]
+
+theorem oddPart_mul_pow (a odd : Nat) (hodd : odd % 2 = 1) :
+    oddPart (2 ^ a * odd) = odd := by
+  have hoddpos : 0 < odd := by omega
+  induction a with
+  | zero =>
+    simp
+    exact oddPart_odd odd hodd
+  | succ a ih =>
+    have hrewrite : 2 ^ (a + 1) * odd = 2 * (2 ^ a * odd) := by
+      rw [Nat.pow_succ, Nat.mul_assoc, Nat.mul_comm 2 odd, ← Nat.mul_assoc, Nat.mul_comm]
+    rw [hrewrite, oddPart_two_mul _ (Nat.mul_pos (Nat.two_pow_pos _) hoddpos), ih]
+
+theorem div_two_of_succ_mul (i : Nat) : (2 * i + 1 - 1) / 2 = i := by
+  have : 2 * i + 1 - 1 = 2 * i := by omega
+  rw [this]
+  exact Nat.mul_div_cancel_left i (by decide)
+
+/-- Code of the `s`-state table whose raw index is `i` (`s ≥ 1`).
+    `codeOf s i + 1 = 2^{s-1} · (2i+1)`. -/
+def codeOf (s i : Nat) : Nat := 2 ^ (s - 1) * (2 * i + 1) - 1
+
+theorem codeOf_succ (s i : Nat) :
+    codeOf s i + 1 = 2 ^ (s - 1) * (2 * i + 1) := by
+  have hm : 0 < 2 ^ (s - 1) * (2 * i + 1) :=
+    Nat.mul_pos (Nat.two_pow_pos _) (by omega)
+  simp [codeOf, Nat.sub_add_cancel (Nat.one_le_of_lt hm)]
+
+/-- State count: one more than the 2-valuation of `n + 1`. -/
+def nstatesOf (n : Nat) : Nat := twoVal (n + 1) + 1
+
+/-- Raw table index, before reduction modulo `numTMs`. -/
+def rawIndex (n : Nat) : Nat := (oddPart (n + 1) - 1) / 2
+
+def indexOf (n : Nat) : Nat := rawIndex n % numTMs (nstatesOf n)
+
 def decode (n : Nat) : TM :=
-  TMFromIndex (indexOf n % numTMs (nstatesOf n)) (nstatesOf n)
+  TMFromIndex (indexOf n) (nstatesOf n)
 
-/-- Codes `512k` are the 1-state all-halt machine (`TMFromIndex 0 1`). -/
-def halterCode (k : Nat) : Nat := 512 * k
+theorem nstatesOf_codeOf (s i : Nat) (hs : 0 < s) : nstatesOf (codeOf s i) = s := by
+  rw [nstatesOf, codeOf_succ s i, twoVal_mul_pow (s - 1) (2 * i + 1) (mod_two_succ_even i)]
+  exact Nat.sub_add_cancel (Nat.succ_le_of_lt hs)
 
-/-- Codes `512k+48` are the 1-state blank-stay machine (`TMFromIndex 6 1`). -/
-def looperCode (k : Nat) : Nat := 512 * k + 48
+theorem rawIndex_codeOf (s i : Nat) : rawIndex (codeOf s i) = i := by
+  rw [rawIndex, codeOf_succ s i,
+    oddPart_mul_pow (s - 1) (2 * i + 1) (mod_two_succ_even i)]
+  exact div_two_of_succ_mul i
+
+theorem decode_codeOf_mod (s i : Nat) (hs : 0 < s) :
+    decode (codeOf s i) = TMFromIndex (i % numTMs s) s := by
+  simp [decode, indexOf, nstatesOf_codeOf s i hs, rawIndex_codeOf s i]
+
+/-- Every `s`-state table occurs as `decode (codeOf s i)`. -/
+theorem decode_codeOf (s i : Nat) (hs : 0 < s) (hi : i < numTMs s) :
+    decode (codeOf s i) = TMFromIndex i s := by
+  rw [decode_codeOf_mod s i hs, Nat.mod_eq_of_lt hi]
+
+theorem exists_nstates (s : Nat) (hs : 0 < s) : ∃ n, nstatesOf n = s :=
+  ⟨codeOf s 0, nstatesOf_codeOf s 0 hs⟩
+
+theorem codeOf_one (i : Nat) : codeOf 1 i = 2 * i := by
+  simp [codeOf]
+
+/-- Codes of the 1-state all-halt machine (`TMFromIndex 0 1`), arbitrarily large. -/
+def halterCode (k : Nat) : Nat := codeOf 1 (numTMs 1 * k)
+
+/-- Codes of the 1-state blank-stay machine (`TMFromIndex 6 1`). -/
+def looperCode (k : Nat) : Nat := codeOf 1 (numTMs 1 * k + 6)
 
 theorem halterCode_decode (k : Nat) : decode (halterCode k) = TMFromIndex 0 1 := by
-  have hmod : halterCode k % 8 = 0 := by
-    rw [halterCode, show 512 = 8 * 64 by decide, Nat.mul_assoc]
-    exact Nat.mul_mod_right 8 (64 * k)
-  have hdiv : halterCode k / 8 = 64 * k := by
-    rw [halterCode, show 512 = 8 * 64 by decide, Nat.mul_assoc]
-    exact Nat.mul_div_cancel_left (64 * k) (by decide : 0 < 8)
-  have hns : nstatesOf (halterCode k) = 1 := by
-    simp [nstatesOf, hmod]
-  have hnum : numTMs 1 = 64 := by decide
-  have hidx : indexOf (halterCode k) % numTMs 1 = 0 := by
-    rw [indexOf, hdiv, hnum]
-    exact Nat.mul_mod_right 64 k
-  simp [decode, hns, hidx]
+  rw [halterCode, decode_codeOf_mod 1 (numTMs 1 * k) (by decide)]
+  simp [Nat.mul_mod_right]
 
 theorem looperCode_decode (k : Nat) : decode (looperCode k) = TMFromIndex 6 1 := by
-  have hmod : looperCode k % 8 = 0 := by
-    rw [looperCode, show 512 = 8 * 64 by decide, show 48 = 8 * 6 by decide,
-      Nat.mul_assoc, ← Nat.mul_add]
-    exact Nat.mul_mod_right 8 (64 * k + 6)
-  have hdiv : looperCode k / 8 = 64 * k + 6 := by
-    rw [looperCode, show 512 = 8 * 64 by decide, show 48 = 8 * 6 by decide,
-      Nat.mul_assoc, ← Nat.mul_add]
-    exact Nat.mul_div_cancel_left (64 * k + 6) (by decide : 0 < 8)
-  have hns : nstatesOf (looperCode k) = 1 := by
-    simp [nstatesOf, hmod]
-  have hnum : numTMs 1 = 64 := by decide
-  have hidx : indexOf (looperCode k) % numTMs 1 = 6 := by
-    rw [indexOf, hdiv, hnum, Nat.mul_add_mod_self_left]
-  simp [decode, hns, hidx]
+  rw [looperCode, decode_codeOf_mod 1 (numTMs 1 * k + 6) (by decide)]
+  have hmod : (numTMs 1 * k + 6) % numTMs 1 = 6 := by
+    rw [Nat.mul_add_mod_self_left]
+    exact Nat.mod_eq_of_lt (by decide : 6 < numTMs 1)
+  simp [hmod]
 
 /-- Index 0 writes blank and halts in place (move bit clear). `Trans.halt`
     moves right, so the transitions are equal only in `.next`. -/
@@ -371,14 +474,21 @@ theorem fromIndex6_not_halts : ¬ Halts (TMFromIndex 6 1) := by
 theorem infinitely_many_halt : ∀ N : Nat, ∃ n, N ≤ n ∧ Halts (decode n) := by
   intro N
   refine ⟨halterCode N, ?_, ?_⟩
-  · simpa [halterCode] using Nat.le_mul_of_pos_left N (by decide : 0 < 512)
+  · rw [halterCode, codeOf_one, ← Nat.mul_assoc]
+    exact Nat.le_mul_of_pos_left N
+      (Nat.mul_pos (by decide : 0 < 2) (by decide : 0 < numTMs 1))
   · rw [halterCode_decode]
     exact fromIndex0_halts
 
 theorem infinitely_many_loop : ∀ N : Nat, ∃ n, N ≤ n ∧ ¬ Halts (decode n) := by
   intro N
   refine ⟨looperCode N, ?_, ?_⟩
-  · simp [looperCode]; omega
+  · rw [looperCode, codeOf_one]
+    have hmul : N ≤ 2 * (numTMs 1 * N) := by
+      rw [← Nat.mul_assoc]
+      exact Nat.le_mul_of_pos_left N
+        (Nat.mul_pos (by decide : 0 < 2) (by decide : 0 < numTMs 1))
+    exact Nat.le_trans hmul (Nat.mul_le_mul_left _ (Nat.le_add_right _ _))
   · rw [looperCode_decode]
     exact fromIndex6_not_halts
 

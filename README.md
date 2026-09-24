@@ -42,8 +42,9 @@ go run ./cmd/hypercomputer -demo=sweep
 ## Lean theory
 
 `lean/Hyperuniverse.lean` models a universe whose machines are finite
-enumerated Turing tables. A particle stores infinitely many bits, and
-decay reads the halt bit of its query (the Zeno ω-limit of that machine).
+enumerated Turing tables, with a code for every state count. A particle
+stores infinitely many bits, and decay reads the halt bit of its query
+(the Zeno ω-limit of that machine).
 `Computable` means some finite table writes the bit function: parity is a
 theorem, and `no_TM_decides_Halt` places the enumerated halt bit outside
 `Computable`. A truncated `N`-bit lab particle decides `Halts` on coded
