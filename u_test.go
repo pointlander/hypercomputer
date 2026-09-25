@@ -4,7 +4,10 @@
 
 package hypercomputer
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestRunUHaltEmpty(t *testing.T) {
 	p := ListingProgram(nil)
@@ -167,6 +170,78 @@ func TestKUNoShorterThanK(t *testing.T) {
 				t.Fatalf("shorter program %q outputs 11", FormatBits(src))
 			}
 		}
+	}
+}
+
+func TestKDivideMatchesExact(t *testing.T) {
+	for _, s := range []string{"", "0", "1", "11", "101", "1111", "1111111111111111"} {
+		x := ParseBitString(s)
+		a := KComplexity(x, 10, 256, 128)
+		b := KDivideConquer(x, 10, 256, DefaultKLeaf, 128)
+		if a.K != b.K || a.How != b.How || !bitsEq(a.Program, b.Program) {
+			t.Fatalf("%q exact %s divide %s", s, a, b)
+		}
+	}
+}
+
+func TestKDivideSplitsRuns(t *testing.T) {
+	x := make([]bool, 64)
+	for i := 0; i < 32; i++ {
+		x[i] = true
+	}
+	r := KDivideConquer(x, 12, 32, 8, 128)
+	listing := len(ListingProgram(x))
+	if r.How != "divide" || r.K <= 0 || r.K >= listing {
+		t.Fatalf("listing %d got %s", listing, r)
+	}
+	if r.Bound < 32 {
+		t.Fatalf("bound %d", r.Bound)
+	}
+	res := RunU(r.Program, r.Bound)
+	if res.Status != UHalt || res.Read != len(r.Program) || !bitsEq(res.Out, x) {
+		t.Fatalf("witness status %d read %d/%d out %d", res.Status, res.Read, len(r.Program), len(res.Out))
+	}
+}
+
+func TestKDivideLarge(t *testing.T) {
+	ones := make([]bool, 5000)
+	for i := range ones {
+		ones[i] = true
+	}
+	start := time.Now()
+	r := KDivideConquer(ones, 12, 256, DefaultKLeaf, 64)
+	if time.Since(start) > 10*time.Second {
+		t.Fatalf("unary took %s", time.Since(start))
+	}
+	if r.K <= 0 || r.K >= len(ListingProgram(ones)) {
+		t.Fatalf("listing %d got %s", len(ListingProgram(ones)), r)
+	}
+	res := RunU(r.Program, r.Bound)
+	if res.Status != UHalt || !bitsEq(res.Out, ones) {
+		t.Fatalf("unary witness status %d out %d", res.Status, len(res.Out))
+	}
+
+	// Alternating runs: two distinct blocks, spliced up the tree.
+	x := make([]bool, 0, 2048)
+	for len(x) < 2048 {
+		for i := 0; i < 8; i++ {
+			x = append(x, true)
+		}
+		for i := 0; i < 8; i++ {
+			x = append(x, false)
+		}
+	}
+	start = time.Now()
+	r = KDivideConquer(x, 12, 256, 8, 64)
+	if time.Since(start) > 10*time.Second {
+		t.Fatalf("runs took %s", time.Since(start))
+	}
+	if r.How != "divide" || r.K >= len(ListingProgram(x)) {
+		t.Fatalf("listing %d got %s", len(ListingProgram(x)), r)
+	}
+	res = RunU(r.Program, r.Bound)
+	if res.Status != UHalt || res.Read != len(r.Program) || !bitsEq(res.Out, x) {
+		t.Fatalf("runs witness status %d read %d/%d out %d", res.Status, res.Read, len(r.Program), len(res.Out))
 	}
 }
 

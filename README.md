@@ -39,6 +39,10 @@ go run ./cmd/hypercomputer -demo=chaitin -kbits=8
 go run ./cmd/hypercomputer -demo=sweep
 ```
 
+Long bit strings go through `KDivideConquer`: each block is solved once
+(listing, repeat, or the bounded search) and the prefix-free programs are
+spliced. The reported length is an upper bound on `K_U`, checked by running `U`.
+
 ## Lean theory
 
 `lean/Hyperuniverse.lean` models a universe whose machines are finite

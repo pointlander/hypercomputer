@@ -272,7 +272,7 @@ func demoKComplexity(prec uint, kstring string, kbits int) {
 	}
 	run := func(s string) {
 		x := hc.ParseBitString(s)
-		r := hc.KComplexity(x, kbits, 256, prec)
+		r := hc.KDivideConquer(x, kbits, 256, 0, prec)
 		fmt.Println(r)
 		if r.AnalogOK {
 			fmt.Printf("  analog oracle agrees, queries=%d analog-steps=%d\n",

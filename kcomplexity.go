@@ -161,6 +161,116 @@ func considerU(x, p []bool, bound int, how string, best *KResult) {
 	best.TMSteps = res.Steps
 }
 
+// splicePrograms drops a trailing HALT on p and continues with q.
+// The result is accepted only when RunU prints the concatenation, so a
+// program that does not end by executing HALT, or that leaves the
+// register in a state q does not expect, is rejected.
+func splicePrograms(p, q []bool) []bool {
+	if len(p) < 3 || len(q) == 0 || p[len(p)-3] || p[len(p)-2] || p[len(p)-1] {
+		return nil
+	}
+	out := make([]bool, 0, len(p)-3+len(q))
+	out = append(out, p[:len(p)-3]...)
+	out = append(out, q...)
+	return out
+}
+
+// uProg is the shortest program of length ≤ maxBits that prints Out.
+type uProg struct {
+	bits  []bool
+	n, i  int
+	steps int
+}
+
+// uSearcher is one shared halt oracle and program catalog for every block
+// of a divide-and-conquer search. Both are exponential in maxBits and are
+// built once; each block is then a map lookup.
+type uSearcher struct {
+	maxBits     int
+	bound       int
+	oracle      *BitFloat
+	halted      []bool
+	m           *Machine
+	isa         bool
+	queries     int
+	analogSteps uint64
+	cat         map[string]uProg
+}
+
+func (s *uSearcher) init(prec uint) {
+	oprec := PrecBits(NumUBuffers(s.maxBits))
+	if prec > oprec {
+		oprec = prec
+	}
+	var err error
+	s.oracle, s.halted = UHaltOracle(s.maxBits, s.bound, oprec)
+	s.m = NewMachine(s.oracle.Prec(), 8)
+	if err = s.m.Load(0, s.oracle); err != nil {
+		panic(err)
+	}
+	s.isa = NumUBuffers(s.maxBits) <= analogISAQueryLimit
+}
+
+// catalog records the shortest halting program for each output.
+// Lengths increase, and i increases inside a length, so the first hit
+// is the one the linear search would have returned.
+func (s *uSearcher) catalog() map[string]uProg {
+	if s.cat != nil {
+		return s.cat
+	}
+	s.cat = make(map[string]uProg)
+	for n := 1; n <= s.maxBits; n++ {
+		for i := 0; i < 1<<n; i++ {
+			s.queries++
+			idx := UBufferIndex(n, i)
+			var halt bool
+			if s.isa {
+				h, steps, err := oracleHalt(s.m, s.oracle, idx, true)
+				if err != nil {
+					panic(err)
+				}
+				s.analogSteps += steps
+				halt = h
+				if halt != s.halted[idx] {
+					panic(fmt.Sprintf("U oracle bit %d disagrees with table", idx))
+				}
+			} else {
+				halt = s.halted[idx]
+			}
+			if !halt {
+				continue
+			}
+			src := IntBits(n, i)
+			res := RunU(src, s.bound)
+			if res.Status != UHalt || res.Read != n {
+				continue
+			}
+			key := FormatBits(res.Out)
+			if _, ok := s.cat[key]; ok {
+				continue
+			}
+			s.cat[key] = uProg{bits: src, n: n, i: i, steps: res.Steps}
+		}
+	}
+	return s.cat
+}
+
+// improve replaces r with the shortest program of length ≤ maxBits that
+// prints x within s.bound, if that program is shorter than r.K.
+func (s *uSearcher) improve(x []bool, r *KResult) {
+	w, ok := s.catalog()[FormatBits(x)]
+	if !ok || (r.K >= 0 && w.n >= r.K) {
+		return
+	}
+	r.K = w.n
+	r.Program = append([]bool(nil), w.bits...)
+	r.How = "search"
+	r.TMSteps = w.steps
+	before := r.AnalogSteps
+	r.AnalogOK = analogWitness(s.m, s.halted, w.n, w.i, s.isa, r)
+	s.analogSteps += r.AnalogSteps - before
+}
+
 // KComplexity computes K_U(x) for the prefix-free machine U (the same
 // U as Omega). Listing and unary-repeat templates are always tried;
 // programs of length 1..maxBits are then searched via the analog halt
@@ -172,72 +282,118 @@ func KComplexity(x []bool, maxBits, bound int, prec uint) *KResult {
 	if bound <= 0 {
 		bound = DefaultUBound
 	}
-	listing := ListingProgram(x)
 	r := &KResult{
 		Bits:    append([]bool(nil), x...),
 		K:       -1,
 		Bound:   bound,
 		MaxBits: maxBits,
 	}
-	considerU(x, listing, bound, "listing", r)
+	considerU(x, ListingProgram(x), bound, "listing", r)
 	if bit, k, ok := unaryRun(x); ok {
 		considerU(x, RepeatProgram(bit, k), bound, "repeat", r)
 	}
-	searchTo := maxBits
-	if r.K >= 0 && r.K-1 < searchTo {
-		searchTo = r.K - 1
+	s := &uSearcher{maxBits: maxBits, bound: bound}
+	s.init(prec)
+	s.improve(x, r)
+	if r.How != "search" && r.Program != nil && len(r.Program) <= maxBits {
+		before := r.AnalogSteps
+		r.AnalogOK = analogWitness(s.m, s.halted, len(r.Program), bitsInt(r.Program), false, r)
+		s.analogSteps += r.AnalogSteps - before
 	}
-	oprec := PrecBits(NumUBuffers(maxBits))
-	if prec > oprec {
-		oprec = prec
+	r.Queries = s.queries
+	r.AnalogSteps = s.analogSteps
+	return r
+}
+
+// DefaultKLeaf is the block size at which divide-and-conquer stops and
+// runs the bounded program search.
+const DefaultKLeaf = 16
+
+// KDivideConquer is an upper bound on K_U(x) for long strings.
+//
+// The string is split in half until each block has at most leaf bits.
+// Each distinct block is solved once — listing, unary repeat, then the
+// analog halt-oracle search shared across blocks — and the resulting
+// prefix-free programs are spliced. Identical blocks hit a cache, so a
+// repeated file does not repeat the search. When len(x) ≤ leaf the
+// result is KComplexity.
+//
+// Printing x takes Ω(|x|) steps of U. If bound is too small to run the
+// witness, it is raised to 6|x|+64 and that budget is reported in
+// Bound. The oracle search itself still uses the supplied bound.
+// leaf ≤ 0 selects DefaultKLeaf.
+func KDivideConquer(x []bool, maxBits, bound, leaf int, prec uint) *KResult {
+	if maxBits < 1 {
+		maxBits = DefaultUMaxBits
 	}
-	oracle, halted := UHaltOracle(maxBits, bound, oprec)
-	m := NewMachine(oracle.Prec(), 8)
-	if err := m.Load(0, oracle); err != nil {
-		panic(err)
+	if bound <= 0 {
+		bound = DefaultUBound
 	}
-	isa := NumUBuffers(maxBits) <= analogISAQueryLimit
-	for n := 1; n <= searchTo; n++ {
-		if r.K >= 0 && n >= r.K {
-			break
+	if leaf < 1 {
+		leaf = DefaultKLeaf
+	}
+	if len(x) <= leaf {
+		return KComplexity(x, maxBits, bound, prec)
+	}
+	prove := bound
+	if need := len(x)*6 + 64; prove < need {
+		prove = need
+	}
+	s := &uSearcher{maxBits: maxBits, bound: bound}
+	s.init(prec)
+	r := s.divide(x, leaf, prove, make(map[string]*KResult))
+	s.improve(x, r)
+	if r.How == "search" {
+		r.Bound = bound
+	} else {
+		r.Bound = prove
+		if r.Program != nil && len(r.Program) <= maxBits {
+			before := r.AnalogSteps
+			r.AnalogOK = analogWitness(s.m, s.halted, len(r.Program), bitsInt(r.Program), false, r)
+			s.analogSteps += r.AnalogSteps - before
 		}
-		for i := 0; i < 1<<n; i++ {
-			r.Queries++
-			idx := UBufferIndex(n, i)
-			var halt bool
-			if isa {
-				h, steps, err := oracleHalt(m, oracle, idx, true)
-				if err != nil {
-					panic(err)
-				}
-				r.AnalogSteps += steps
-				halt = h
-				if halt != halted[idx] {
-					panic(fmt.Sprintf("U oracle bit %d disagrees with table", idx))
-				}
-			} else {
-				halt = halted[idx]
-			}
-			if !halt {
-				continue
-			}
-			src := IntBits(n, i)
-			res := RunU(src, bound)
-			if res.Status != UHalt || res.Read != n || !bitsEq(res.Out, x) {
-				continue
-			}
-			r.K = n
-			r.Program = src
-			r.How = "search"
-			r.TMSteps = res.Steps
-			r.AnalogOK = analogWitness(m, halted, n, i, isa, r)
+	}
+	r.Queries = s.queries
+	r.AnalogSteps = s.analogSteps
+	r.Bits = append([]bool(nil), x...)
+	r.MaxBits = maxBits
+	return r
+}
+
+func (s *uSearcher) divide(x []bool, leaf, prove int, cache map[string]*KResult) *KResult {
+	key := FormatBits(x)
+	if hit, ok := cache[key]; ok {
+		return hit
+	}
+	r := &KResult{
+		Bits:    append([]bool(nil), x...),
+		K:       -1,
+		Bound:   prove,
+		MaxBits: s.maxBits,
+	}
+	considerU(x, ListingProgram(x), prove, "listing", r)
+	if bit, k, ok := unaryRun(x); ok {
+		considerU(x, RepeatProgram(bit, k), prove, "repeat", r)
+		if r.How == "repeat" {
+			// A splice of smaller repeats is longer. Still look for a
+			// program shorter than this repeat under the bit cap.
+			s.improve(x, r)
+			cache[key] = r
 			return r
 		}
 	}
-	if r.Program != nil && len(r.Program) <= maxBits {
-		n := len(r.Program)
-		r.AnalogOK = analogWitness(m, halted, n, bitsInt(r.Program), false, r)
+	if len(x) <= leaf {
+		s.improve(x, r)
+		cache[key] = r
+		return r
 	}
+	mid := len(x) / 2
+	left := s.divide(x[:mid], leaf, prove, cache)
+	right := s.divide(x[mid:], leaf, prove, cache)
+	if sp := splicePrograms(left.Program, right.Program); sp != nil {
+		considerU(x, sp, prove, "divide", r)
+	}
+	cache[key] = r
 	return r
 }
 

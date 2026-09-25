@@ -36,7 +36,9 @@ const (
 	uOpJmp  = 6
 	uOpSet  = 7
 
-	uOutLimit = 4096
+	// uOutLimit caps a looping OUT so a huge step bound cannot
+	// allocate without limit. It sits well above file-sized inputs.
+	uOutLimit = 1 << 22
 
 	// DefaultUMaxBits is the default brute-force program length.
 	DefaultUMaxBits = 12
