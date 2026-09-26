@@ -24,8 +24,8 @@
 //   - a state-vector quantum circuit simulator over BitFloat complexes
 //   - Kolmogorov complexity of bit strings via the analog halt oracle,
 //     with a divide-and-conquer upper bound for long strings
-//   - a next-byte language model whose input is that machine code,
-//     trained on the Gutenberg Shakespeare text
+//   - a next-byte language model on the Gutenberg Shakespeare text,
+//     comparing one U program for the context window with a one-hot window
 //   - Chaitin reconstruction of K_U from analog bits of Ω_U
 //   - a p×T resource sweep: analog Ω bits and dovetail bound vs certified K_U
 //

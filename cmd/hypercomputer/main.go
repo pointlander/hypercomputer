@@ -294,7 +294,7 @@ func demoKComplexity(prec uint, kstring string, kbits int) {
 }
 
 func demoLM(path string, prec uint, kbits int) {
-	fmt.Println("== next-byte LM on U machine-code embeddings ==")
+	fmt.Println("== context program vs one-hot next-byte LM ==")
 	body, err := hc.LoadCorpus(path)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "lm: %v\n", err)
@@ -303,7 +303,7 @@ func demoLM(path string, prec uint, kbits int) {
 	if kbits < 1 {
 		kbits = 12
 	}
-	m, rep, err := hc.TrainLanguageModel(body, hc.LMConfig{
+	span, spanRep, hotRep, err := hc.CompareContextModels(body, hc.LMConfig{
 		MaxBits: kbits,
 		Prec:    prec,
 	})
@@ -311,16 +311,16 @@ func demoLM(path string, prec uint, kbits int) {
 		fmt.Fprintf(os.Stderr, "lm: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("corpus %s  body %d bytes  alphabet %d  program width %d  window %d\n",
-		path, len(body), len(m.Alphabet), rep.Dim, rep.Window)
-	for _, b := range []byte{'e', ' ', '\n'} {
-		fmt.Printf("  %q  K=%d via %s  p=%s\n",
-			b, len(m.Program[b]), m.How[b], hc.FormatBits(m.Program[b]))
+	fmt.Printf("corpus %s  body %d bytes  alphabet %d  window %d\n",
+		path, len(body), len(span.Alphabet), span.Window)
+	for _, ex := range []string{"    ", "the ", "\n\n\n\n"} {
+		prog, how, k := span.WindowProgram([]byte(ex))
+		fmt.Printf("  %q  K=%d via %s  |p|=%d\n", ex, k, how, len(prog))
 	}
-	fmt.Printf("train  n=%d  nats=%.3f  ppl=%.2f  acc=%.3f\n",
-		rep.TrainN, rep.TrainNLL, rep.TrainPPL, rep.TrainAcc)
-	fmt.Printf("valid  n=%d  nats=%.3f  ppl=%.2f  acc=%.3f\n",
-		rep.ValidN, rep.ValidNLL, rep.ValidPPL, rep.ValidAcc)
+	fmt.Printf("span    features %d  train ppl %.2f acc %.3f  valid ppl %.2f acc %.3f\n",
+		spanRep.Dim, spanRep.TrainPPL, spanRep.TrainAcc, spanRep.ValidPPL, spanRep.ValidAcc)
+	fmt.Printf("one-hot features %d  train ppl %.2f acc %.3f  valid ppl %.2f acc %.3f\n",
+		hotRep.Dim, hotRep.TrainPPL, hotRep.TrainAcc, hotRep.ValidPPL, hotRep.ValidAcc)
 	fmt.Println()
 }
 

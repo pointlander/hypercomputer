@@ -40,9 +40,10 @@ go run ./cmd/hypercomputer -demo=sweep
 go run ./cmd/hypercomputer -demo=lm -text=pg100.txt
 ```
 
-`lm` trains a next-byte model on The Complete Works of William Shakespeare.
-Each byte is embedded as the bit string of its shortest U program; the
-last tenth of the book is held out for validation.
+`lm` compares two next-byte models on The Complete Works of William
+Shakespeare. One reads the single U program for the previous four bytes.
+The other reads a one-hot window of the same width. The last tenth of
+the book is validation for both.
 
 Long bit strings go through `KDivideConquer`: each block is solved once
 (listing, repeat, or the bounded search) and the prefix-free programs are

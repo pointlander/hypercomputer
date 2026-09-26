@@ -51,6 +51,7 @@ type LMReport struct {
 	Dim      int
 	Window   int
 	Epochs   int
+	Kind     string
 }
 
 // LMConfig selects the corpus split and the K search used for embeddings.
@@ -173,18 +174,10 @@ func byteMachineCodes(maxBits, bound int, prec uint) (prog [256][]bool, how [256
 func TrainLanguageModel(text []byte, cfg LMConfig) (*LangModel, LMReport, error) {
 	cfg.norm()
 	var rep LMReport
-	if len(text) < cfg.Window+2 {
-		return nil, rep, errCorpusShort
+	train, valid, err := splitCorpus(text, cfg)
+	if err != nil {
+		return nil, rep, err
 	}
-	nValid := int(float64(len(text)) * cfg.ValidFrac)
-	if nValid < cfg.Window+1 {
-		nValid = cfg.Window + 1
-	}
-	if nValid >= len(text)-cfg.Window {
-		return nil, rep, errCorpusShort
-	}
-	train := text[:len(text)-nValid]
-	valid := text[len(text)-nValid:]
 
 	prog, how, dim := byteMachineCodes(cfg.MaxBits, cfg.Bound, cfg.Prec)
 	m := &LangModel{
@@ -240,8 +233,371 @@ func TrainLanguageModel(text []byte, cfg LMConfig) (*LangModel, LMReport, error)
 		Dim:      dim,
 		Window:   cfg.Window,
 		Epochs:   cfg.Epochs,
+		Kind:     "byte",
 	}
 	return m, rep, nil
+}
+
+func splitCorpus(text []byte, cfg LMConfig) (train, valid []byte, err error) {
+	if len(text) < cfg.Window+2 {
+		return nil, nil, errCorpusShort
+	}
+	nValid := int(float64(len(text)) * cfg.ValidFrac)
+	if nValid < cfg.Window+1 {
+		nValid = cfg.Window + 1
+	}
+	if nValid >= len(text)-cfg.Window {
+		return nil, nil, errCorpusShort
+	}
+	cut := len(text) - nValid
+	return text[:cut], text[cut:], nil
+}
+
+func howIndex(h string) int {
+	switch h {
+	case "repeat":
+		return 1
+	case "divide":
+		return 2
+	case "search":
+		return 3
+	default:
+		return 0
+	}
+}
+
+func windowBits(w []byte) []bool {
+	out := make([]bool, 0, 8*len(w))
+	for _, b := range w {
+		out = append(out, byteBits(b)...)
+	}
+	return out
+}
+
+func opcodeRates(p []bool) [8]float32 {
+	var c [8]float32
+	in := 0
+	var n float32
+	for in < len(p) {
+		inst, ok := uFetchInst(p, &in)
+		if !ok {
+			break
+		}
+		if inst.op >= 0 && inst.op < 8 {
+			c[inst.op]++
+			n++
+		}
+	}
+	if n > 0 {
+		for i := range c {
+			c[i] /= n
+		}
+	}
+	return c
+}
+
+// SpanLM reads one U program for the whole context window.
+// The coordinates are the program bits, its length, how it was built
+// (listing, repeat, divide, search), and its opcode rates.
+type SpanLM struct {
+	Window   int
+	ListLen  int
+	Dim      int
+	ClassOf  [256]int
+	Alphabet []byte
+	W        []float32
+	B        []float32
+	search   *uSearcher
+	kcache   map[string]*KResult
+	vcache   map[string][]float32
+	prove    int
+}
+
+// WindowProgram is the U program for the bit string of w.
+func (m *SpanLM) WindowProgram(w []byte) (prog []bool, how string, k int) {
+	bits := windowBits(w)
+	r := m.search.divide(bits, DefaultKLeaf, m.prove, m.kcache)
+	return r.Program, r.How, r.K
+}
+
+func (m *SpanLM) embed(w []byte) []float32 {
+	key := string(w)
+	if v, ok := m.vcache[key]; ok {
+		return v
+	}
+	prog, how, k := m.WindowProgram(w)
+	v := make([]float32, m.Dim)
+	n := len(prog)
+	if n > m.ListLen {
+		n = m.ListLen
+	}
+	for i := 0; i < n; i++ {
+		if prog[i] {
+			v[i] = 1
+		}
+	}
+	v[m.ListLen] = float32(k) / float32(m.ListLen)
+	v[m.ListLen+1+howIndex(how)] = 1
+	rates := opcodeRates(prog)
+	for i, r := range rates {
+		v[m.ListLen+5+i] = r
+	}
+	m.vcache[key] = v
+	return v
+}
+
+func (m *SpanLM) pass(text []byte, rate float32, update bool) (nll float64, correct, scored, total int) {
+	if len(text) <= m.Window {
+		return 0, 0, 0, 0
+	}
+	nClass := len(m.Alphabet)
+	logits := make([]float32, nClass)
+	probs := make([]float32, nClass)
+	for i := m.Window; i < len(text); i++ {
+		total++
+		class := m.ClassOf[text[i]]
+		if class < 0 {
+			continue
+		}
+		scored++
+		ctx := m.embed(text[i-m.Window : i])
+		m.forward(ctx, logits)
+		loss, hit := softmaxStep(logits, probs, class)
+		nll += float64(loss)
+		if hit {
+			correct++
+		}
+		if update {
+			m.step(ctx, probs, class, rate)
+		}
+	}
+	return nll, correct, scored, total
+}
+
+func (m *SpanLM) forward(ctx, logits []float32) {
+	dim := m.Dim
+	for c := range logits {
+		row := m.W[c*dim : (c+1)*dim]
+		var s float32
+		for d, x := range ctx {
+			s += x * row[d]
+		}
+		logits[c] = s + m.B[c]
+	}
+}
+
+func (m *SpanLM) step(ctx, probs []float32, class int, rate float32) {
+	dim := m.Dim
+	for c, p := range probs {
+		g := p
+		if c == class {
+			g -= 1
+		}
+		g *= rate
+		row := m.W[c*dim : (c+1)*dim]
+		for d, x := range ctx {
+			row[d] -= g * x
+		}
+		m.B[c] -= g
+	}
+}
+
+// OneHotLM is the same linear next-byte model on a one-hot window.
+type OneHotLM struct {
+	Window   int
+	ClassOf  [256]int
+	Alphabet []byte
+	W        []float32 // [nClass * Window * nClass], index (c, pos, byte)
+	B        []float32
+}
+
+func (m *OneHotLM) pass(text []byte, rate float32, update bool) (nll float64, correct, scored, total int) {
+	if len(text) <= m.Window {
+		return 0, 0, 0, 0
+	}
+	nClass := len(m.Alphabet)
+	logits := make([]float32, nClass)
+	probs := make([]float32, nClass)
+	for i := m.Window; i < len(text); i++ {
+		total++
+		class := m.ClassOf[text[i]]
+		if class < 0 {
+			continue
+		}
+		scored++
+		window := text[i-m.Window : i]
+		m.forward(window, logits)
+		loss, hit := softmaxStep(logits, probs, class)
+		nll += float64(loss)
+		if hit {
+			correct++
+		}
+		if update {
+			m.step(window, probs, class, rate)
+		}
+	}
+	return nll, correct, scored, total
+}
+
+func (m *OneHotLM) forward(window []byte, logits []float32) {
+	n := len(m.Alphabet)
+	for c := range logits {
+		s := m.B[c]
+		base := c * m.Window * n
+		for t, b := range window {
+			a := m.ClassOf[b]
+			if a < 0 {
+				continue
+			}
+			s += m.W[base+t*n+a]
+		}
+		logits[c] = s
+	}
+}
+
+func (m *OneHotLM) step(window []byte, probs []float32, class int, rate float32) {
+	n := len(m.Alphabet)
+	for c, p := range probs {
+		g := p
+		if c == class {
+			g -= 1
+		}
+		g *= rate
+		m.B[c] -= g
+		base := c * m.Window * n
+		for t, b := range window {
+			a := m.ClassOf[b]
+			if a < 0 {
+				continue
+			}
+			m.W[base+t*n+a] -= g
+		}
+	}
+}
+
+func newAlphabet(train []byte) (classOf [256]int, alphabet []byte) {
+	for i := range classOf {
+		classOf[i] = -1
+	}
+	for _, b := range train {
+		if classOf[b] >= 0 {
+			continue
+		}
+		classOf[b] = len(alphabet)
+		alphabet = append(alphabet, b)
+	}
+	return classOf, alphabet
+}
+
+func finishReport(kind string, cfg LMConfig, dim int, nll float64, correct, scored, total int, vnll float64, vcorrect, vscored, vtotal int) (LMReport, error) {
+	if scored == 0 || vscored == 0 {
+		return LMReport{}, errCorpusShort
+	}
+	return LMReport{
+		TrainN:   total,
+		ValidN:   vtotal,
+		TrainNLL: nll / float64(scored),
+		ValidNLL: vnll / float64(vscored),
+		TrainPPL: math.Exp(nll / float64(scored)),
+		ValidPPL: math.Exp(vnll / float64(vscored)),
+		TrainAcc: float64(correct) / float64(total),
+		ValidAcc: float64(vcorrect) / float64(vtotal),
+		Dim:      dim,
+		Window:   cfg.Window,
+		Epochs:   cfg.Epochs,
+		Kind:     kind,
+	}, nil
+}
+
+func runEpochs(epochs int, rate float32, train, valid []byte, pass func([]byte, float32, bool) (float64, int, int, int)) (trNLL float64, trC, trS, trT int, vaNLL float64, vaC, vaS, vaT int) {
+	for ep := 0; ep < epochs; ep++ {
+		nll, c, s, t := pass(train, rate, true)
+		trNLL += nll
+		trC += c
+		trS += s
+		trT += t
+	}
+	vaNLL, vaC, vaS, vaT = pass(valid, 0, false)
+	return
+}
+
+// TrainSpanLM fits the next-byte model whose input is the single U
+// program of the context window.
+func TrainSpanLM(text []byte, cfg LMConfig) (*SpanLM, LMReport, error) {
+	cfg.norm()
+	train, valid, err := splitCorpus(text, cfg)
+	if err != nil {
+		return nil, LMReport{}, err
+	}
+	classOf, alphabet := newAlphabet(train)
+	listLen := 3 * (8*cfg.Window + 1)
+	m := &SpanLM{
+		Window:   cfg.Window,
+		ListLen:  listLen,
+		Dim:      listLen + 1 + 4 + 8,
+		ClassOf:  classOf,
+		Alphabet: alphabet,
+		W:        make([]float32, len(alphabet)*(listLen+1+4+8)),
+		B:        make([]float32, len(alphabet)),
+		search:   &uSearcher{maxBits: cfg.MaxBits, bound: cfg.Bound},
+		kcache:   make(map[string]*KResult),
+		vcache:   make(map[string][]float32),
+		prove:    cfg.Bound,
+	}
+	need := 6*(8*cfg.Window) + 64
+	if m.prove < need {
+		m.prove = need
+	}
+	m.search.init(cfg.Prec)
+	initWeights(m.W, cfg.Seed)
+	trNLL, trC, trS, trT, vaNLL, vaC, vaS, vaT := runEpochs(cfg.Epochs, cfg.Rate, train, valid, m.pass)
+	rep, err := finishReport("span", cfg, m.Dim, trNLL, trC, trS, trT, vaNLL, vaC, vaS, vaT)
+	return m, rep, err
+}
+
+// TrainOneHotLM fits the same linear model on a one-hot encoding of the
+// same window.
+func TrainOneHotLM(text []byte, cfg LMConfig) (*OneHotLM, LMReport, error) {
+	cfg.norm()
+	train, valid, err := splitCorpus(text, cfg)
+	if err != nil {
+		return nil, LMReport{}, err
+	}
+	classOf, alphabet := newAlphabet(train)
+	n := len(alphabet)
+	m := &OneHotLM{
+		Window:   cfg.Window,
+		ClassOf:  classOf,
+		Alphabet: alphabet,
+		W:        make([]float32, n*cfg.Window*n),
+		B:        make([]float32, n),
+	}
+	initWeights(m.W, cfg.Seed)
+	trNLL, trC, trS, trT, vaNLL, vaC, vaS, vaT := runEpochs(cfg.Epochs, cfg.Rate, train, valid, m.pass)
+	rep, err := finishReport("onehot", cfg, cfg.Window*n, trNLL, trC, trS, trT, vaNLL, vaC, vaS, vaT)
+	return m, rep, err
+}
+
+// CompareContextModels trains the span-program model and the one-hot
+// model on the same split, with the same rate, epochs, and seed.
+func CompareContextModels(text []byte, cfg LMConfig) (*SpanLM, LMReport, LMReport, error) {
+	spanM, span, err := TrainSpanLM(text, cfg)
+	if err != nil {
+		return nil, LMReport{}, LMReport{}, err
+	}
+	_, hot, err := TrainOneHotLM(text, cfg)
+	if err != nil {
+		return nil, LMReport{}, LMReport{}, err
+	}
+	return spanM, span, hot, nil
+}
+
+func initWeights(w []float32, seed uint64) {
+	rng := rand.New(rand.NewPCG(seed, seed^0x9e3779b97f4a7c15))
+	const scale = 0.02
+	for i := range w {
+		w[i] = (rng.Float32()*2 - 1) * scale
+	}
 }
 
 // pass walks text one byte at a time. update writes the SGD step at rate.
