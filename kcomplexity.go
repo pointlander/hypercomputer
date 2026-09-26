@@ -272,9 +272,9 @@ func (s *uSearcher) improve(x []bool, r *KResult) {
 }
 
 // KComplexity computes K_U(x) for the prefix-free machine U (the same
-// U as Omega). Listing and unary-repeat templates are always tried;
-// programs of length 1..maxBits are then searched via the analog halt
-// oracle. Finite bound and maxBits give K^T ≥ K_U.
+// U as Omega). Listing, bit-repeat, and byte-repeat templates are
+// always tried; programs of length 1..maxBits are then searched via
+// the analog halt oracle. Finite bound and maxBits give K^T ≥ K_U.
 func KComplexity(x []bool, maxBits, bound int, prec uint) *KResult {
 	if maxBits < 1 {
 		maxBits = DefaultUMaxBits
@@ -288,10 +288,7 @@ func KComplexity(x []bool, maxBits, bound int, prec uint) *KResult {
 		Bound:   bound,
 		MaxBits: maxBits,
 	}
-	considerU(x, ListingProgram(x), bound, "listing", r)
-	if bit, k, ok := unaryRun(x); ok {
-		considerU(x, RepeatProgram(bit, k), bound, "repeat", r)
-	}
+	considerTemplates(x, bound, r)
 	s := &uSearcher{maxBits: maxBits, bound: bound}
 	s.init(prec)
 	s.improve(x, r)
@@ -371,16 +368,13 @@ func (s *uSearcher) divide(x []bool, leaf, prove int, cache map[string]*KResult)
 		Bound:   prove,
 		MaxBits: s.maxBits,
 	}
-	considerU(x, ListingProgram(x), prove, "listing", r)
-	if bit, k, ok := unaryRun(x); ok {
-		considerU(x, RepeatProgram(bit, k), prove, "repeat", r)
-		if r.How == "repeat" {
-			// A splice of smaller repeats is longer. Still look for a
-			// program shorter than this repeat under the bit cap.
-			s.improve(x, r)
-			cache[key] = r
-			return r
-		}
+	considerTemplates(x, prove, r)
+	if r.How == "repeat" {
+		// A splice of smaller repeats is longer. Still look for a
+		// program shorter than this repeat under the bit cap.
+		s.improve(x, r)
+		cache[key] = r
+		return r
 	}
 	if len(x) <= leaf {
 		s.improve(x, r)
@@ -409,6 +403,16 @@ func analogWitness(m *Machine, halted []bool, n, i int, counted bool, r *KResult
 	return err == nil && bit == 1
 }
 
+func considerTemplates(x []bool, bound int, r *KResult) {
+	considerU(x, ListingProgram(x), bound, "listing", r)
+	if bit, k, ok := unaryRun(x); ok {
+		considerU(x, RepeatProgram(bit, k), bound, "repeat", r)
+	}
+	if b, k, ok := byteRun(x); ok {
+		considerU(x, ByteRunProgram(b, k), bound, "repeat", r)
+	}
+}
+
 func unaryRun(x []bool) (bit bool, k int, ok bool) {
 	if len(x) == 0 {
 		return false, 0, false
@@ -420,6 +424,33 @@ func unaryRun(x []bool) (bit bool, k int, ok bool) {
 		}
 	}
 	return b, len(x), true
+}
+
+// byteRun reports whether x is k ≥ 1 copies of one byte, MSB first.
+func byteRun(x []bool) (b byte, k int, ok bool) {
+	if len(x) < 8 || len(x)%8 != 0 {
+		return 0, 0, false
+	}
+	k = len(x) / 8
+	for i := 0; i < 8; i++ {
+		if x[i] {
+			b |= 1 << uint(7-i)
+		}
+	}
+	for n := 1; n < k; n++ {
+		off := n * 8
+		for i := 0; i < 8; i++ {
+			bit := (b >> uint(7-i)) & 1
+			var got byte
+			if x[off+i] {
+				got = 1
+			}
+			if got != bit {
+				return 0, 0, false
+			}
+		}
+	}
+	return b, k, true
 }
 
 func bitsInt(b []bool) int {

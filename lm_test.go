@@ -96,6 +96,31 @@ func TestSpanProgramCompressesBlankBits(t *testing.T) {
 	}
 }
 
+func TestSpanByteRunSpaces(t *testing.T) {
+	text := bytes.Repeat([]byte{' ', '\n'}, 32)
+	m, _, err := TrainSpanLM(text, LMConfig{
+		Window: 4, Epochs: 1, Rate: 0.1, ValidFrac: 0.1,
+		MaxBits: 8, Bound: 64, Prec: 64, Seed: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ex := range [][]byte{
+		{' ', ' ', ' ', ' '},
+		{'\n', '\n', '\n', '\n'},
+	} {
+		prog, how, k := m.WindowProgram(ex)
+		bits := windowBits(ex)
+		res := RunU(prog, m.prove)
+		if res.Status != UHalt || !bitsEq(res.Out, bits) {
+			t.Fatalf("%q how %s status %d", ex, how, res.Status)
+		}
+		if how != "repeat" || k >= len(ListingProgram(bits)) {
+			t.Fatalf("%q how %s K=%d listing %d", ex, how, k, len(ListingProgram(bits)))
+		}
+	}
+}
+
 func TestSpanVsOneHotLearnsCycle(t *testing.T) {
 	var text []byte
 	for i := 0; i < 3000; i++ {

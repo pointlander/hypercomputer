@@ -228,6 +228,44 @@ func RepeatProgram(one bool, k int) []bool {
 	return p
 }
 
+// ByteRunProgram emits the 8 bits of b exactly k times, then halts.
+// k = 0 is HALT. For k ≤ 15 the program is 47 bits, shorter than a
+// listing once the byte is repeated.
+func ByteRunProgram(b byte, k int) []bool {
+	if k <= 0 {
+		p := make([]bool, 0, 3)
+		putBits(&p, uOpHalt, 3)
+		return p
+	}
+	p := make([]bool, 0, 64+3*k)
+	extra := 0
+	setv := k
+	if setv > 15 {
+		extra = setv - 15
+		setv = 15
+	}
+	putBits(&p, uOpSet, 3)
+	putBits(&p, setv, 4)
+	for i := 0; i < extra; i++ {
+		putBits(&p, uOpInc, 3)
+	}
+	for i := 7; i >= 0; i-- {
+		if b&(1<<uint(i)) != 0 {
+			putBits(&p, uOpOut1, 3)
+		} else {
+			putBits(&p, uOpOut0, 3)
+		}
+	}
+	putBits(&p, uOpDec, 3)
+	putBits(&p, uOpJz, 3)
+	putBits(&p, uOpJmp, 3)
+	// First OUT is instruction extra+1, JMP is extra+11.
+	// (extra+11) - (arg+1) = extra+1 ⇒ arg = 9.
+	putBits(&p, 9, 4)
+	putBits(&p, uOpHalt, 3)
+	return p
+}
+
 // IntBits is the n-bit big-endian representation of i.
 func IntBits(n, i int) []bool {
 	b := make([]bool, n)

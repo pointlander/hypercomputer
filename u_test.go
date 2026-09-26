@@ -47,6 +47,31 @@ func TestRunURepeatOnes(t *testing.T) {
 	}
 }
 
+func TestByteRunProgram(t *testing.T) {
+	for _, b := range []byte{' ', '\n', 'e', 0x00, 0xff} {
+		for k := 1; k <= 24; k++ {
+			p := ByteRunProgram(b, k)
+			res := RunU(p, 16*k+64)
+			if res.Status != UHalt || res.Read != len(p) {
+				t.Fatalf("b=%#x k=%d status=%d read=%d want %d", b, k, res.Status, res.Read, len(p))
+			}
+			want := make([]bool, 0, 8*k)
+			one := byteBits(b)
+			for i := 0; i < k; i++ {
+				want = append(want, one...)
+			}
+			if !bitsEq(res.Out, want) {
+				t.Fatalf("b=%#x k=%d out len %d", b, k, len(res.Out))
+			}
+		}
+	}
+	spaces := windowBits([]byte{' ', ' ', ' ', ' '})
+	p := ByteRunProgram(' ', 4)
+	if len(p) >= len(ListingProgram(spaces)) {
+		t.Fatalf("byte-run %d listing %d", len(p), len(ListingProgram(spaces)))
+	}
+}
+
 func TestRunUInfiniteLoopTimesOut(t *testing.T) {
 	// SET 1, OUT1, JMP 0 (jump to self)
 	var p []bool
