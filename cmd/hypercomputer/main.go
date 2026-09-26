@@ -14,10 +14,11 @@ import (
 )
 
 func main() {
-	demo := flag.String("demo", "all", "bits, oracle, zeno, omega, arnn, newton, quantum, kcomplexity, chaitin, sweep, or all")
+	demo := flag.String("demo", "all", "bits, oracle, zeno, omega, arnn, newton, quantum, kcomplexity, chaitin, sweep, lm, or all")
 	prec := flag.Uint("prec", 256, "mantissa precision in bits")
 	kstring := flag.String("kstring", "", "bit string for k-complexity (e.g. 1111)")
 	kbits := flag.Int("kbits", 12, "max U-program length for k-complexity search")
+	text := flag.String("text", "pg100.txt", "corpus for -demo=lm (Project Gutenberg text)")
 	flag.Parse()
 
 	switch *demo {
@@ -41,6 +42,8 @@ func main() {
 		demoChaitin(*prec, *kstring, *kbits)
 	case "sweep":
 		demoSweep(*prec)
+	case "lm":
+		demoLM(*text, *prec, *kbits)
 	case "all":
 		demoBits(*prec)
 		demoOracle(*prec)
@@ -287,6 +290,37 @@ func demoKComplexity(prec uint, kstring string, kbits int) {
 	for _, s := range []string{"", "0", "1", "11", "101", "1111", "1111111111111111"} {
 		run(s)
 	}
+	fmt.Println()
+}
+
+func demoLM(path string, prec uint, kbits int) {
+	fmt.Println("== next-byte LM on U machine-code embeddings ==")
+	body, err := hc.LoadCorpus(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "lm: %v\n", err)
+		os.Exit(1)
+	}
+	if kbits < 1 {
+		kbits = 12
+	}
+	m, rep, err := hc.TrainLanguageModel(body, hc.LMConfig{
+		MaxBits: kbits,
+		Prec:    prec,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "lm: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("corpus %s  body %d bytes  alphabet %d  program width %d  window %d\n",
+		path, len(body), len(m.Alphabet), rep.Dim, rep.Window)
+	for _, b := range []byte{'e', ' ', '\n'} {
+		fmt.Printf("  %q  K=%d via %s  p=%s\n",
+			b, len(m.Program[b]), m.How[b], hc.FormatBits(m.Program[b]))
+	}
+	fmt.Printf("train  n=%d  nats=%.3f  ppl=%.2f  acc=%.3f\n",
+		rep.TrainN, rep.TrainNLL, rep.TrainPPL, rep.TrainAcc)
+	fmt.Printf("valid  n=%d  nats=%.3f  ppl=%.2f  acc=%.3f\n",
+		rep.ValidN, rep.ValidNLL, rep.ValidPPL, rep.ValidAcc)
 	fmt.Println()
 }
 

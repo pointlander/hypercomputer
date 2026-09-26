@@ -37,7 +37,12 @@ go run ./cmd/hypercomputer -demo=quantum -prec=256
 go run ./cmd/hypercomputer -demo=kcomplexity -kstring=1111 -kbits=12
 go run ./cmd/hypercomputer -demo=chaitin -kbits=8
 go run ./cmd/hypercomputer -demo=sweep
+go run ./cmd/hypercomputer -demo=lm -text=pg100.txt
 ```
+
+`lm` trains a next-byte model on The Complete Works of William Shakespeare.
+Each byte is embedded as the bit string of its shortest U program; the
+last tenth of the book is held out for validation.
 
 Long bit strings go through `KDivideConquer`: each block is solved once
 (listing, repeat, or the bounded search) and the prefix-free programs are
