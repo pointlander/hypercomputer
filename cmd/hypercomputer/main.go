@@ -294,7 +294,7 @@ func demoKComplexity(prec uint, kstring string, kbits int) {
 }
 
 func demoLM(path string, prec uint, kbits int) {
-	fmt.Println("== ΔK vs one-hot next-byte LM ==")
+	fmt.Println("== phrase code vs one-hot next-byte LM ==")
 	body, err := hc.LoadCorpus(path)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "lm: %v\n", err)
@@ -303,7 +303,7 @@ func demoLM(path string, prec uint, kbits int) {
 	if kbits < 1 {
 		kbits = 12
 	}
-	dk, dkRep, hotRep, err := hc.CompareDeltaK(body, hc.LMConfig{
+	ph, phRep, hotRep, err := hc.ComparePhraseK(body, hc.LMConfig{
 		MaxBits: kbits,
 		Prec:    prec,
 	})
@@ -312,20 +312,21 @@ func demoLM(path string, prec uint, kbits int) {
 		os.Exit(1)
 	}
 	fmt.Printf("corpus %s  body %d bytes  alphabet %d  window %d\n",
-		path, len(body), len(dk.Alphabet), dk.Window)
+		path, len(body), len(ph.Alphabet), ph.Window)
 	for _, ex := range []struct {
 		ctx string
 		b   byte
 	}{
+		{"the ", ' '},
+		{"the ", 'e'},
+		{"the ", 'q'},
 		{"    ", ' '},
 		{"    ", 'e'},
-		{"the ", ' '},
-		{"\n\n\n\n", '\n'},
 	} {
-		fmt.Printf("  ΔK(%q | %q) = %d\n", ex.b, ex.ctx, dk.Delta([]byte(ex.ctx), ex.b))
+		fmt.Printf("  |p|(%q | %q) = %d\n", ex.b, ex.ctx, ph.CodeLen([]byte(ex.ctx), ex.b))
 	}
-	fmt.Printf("ΔK      train ppl %.2f acc %.3f  valid ppl %.2f acc %.3f\n",
-		dkRep.TrainPPL, dkRep.TrainAcc, dkRep.ValidPPL, dkRep.ValidAcc)
+	fmt.Printf("phrase  train ppl %.2f acc %.3f  valid ppl %.2f acc %.3f\n",
+		phRep.TrainPPL, phRep.TrainAcc, phRep.ValidPPL, phRep.ValidAcc)
 	fmt.Printf("one-hot train ppl %.2f acc %.3f  valid ppl %.2f acc %.3f\n",
 		hotRep.TrainPPL, hotRep.TrainAcc, hotRep.ValidPPL, hotRep.ValidAcc)
 	fmt.Println()

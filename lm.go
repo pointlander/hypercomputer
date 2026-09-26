@@ -705,6 +705,265 @@ func CompareDeltaK(text []byte, cfg LMConfig) (*DeltaKLM, LMReport, LMReport, er
 	return dk, drep, hot, nil
 }
 
+// PhraseKLM gives every training window a short prefix-free program.
+// A context's continuations use a Witten-Bell code: a byte that followed
+// the window gets a Shannon length from its count, and a byte that never
+// did is an escape plus today's listing, byte-run, or splice. ΔK is that
+// conditional program length.
+type PhraseKLM struct {
+	Window   int
+	ClassOf  [256]int
+	Alphabet []byte
+	ctx      map[byteKey]*phraseCond
+	tmpl     map[byteKey]int
+}
+
+type phraseCond struct {
+	total int
+	succ  map[byte]int
+}
+
+func (m *PhraseKLM) templateK(w []byte) int {
+	key := byteKeyOf(w)
+	if k, ok := m.tmpl[key]; ok {
+		return k
+	}
+	nbits := 8 * len(w)
+	best := 3 * (nbits + 1)
+	if len(w) >= 2 {
+		same := true
+		for _, b := range w[1:] {
+			if b != w[0] {
+				same = false
+				break
+			}
+		}
+		if same {
+			extra := 0
+			if len(w) > 15 {
+				extra = len(w) - 15
+			}
+			if br := 47 + 3*extra; br < best {
+				best = br
+			}
+		}
+	}
+	if unaryByteBits(w) && nbits > 0 {
+		extra := 0
+		if nbits > 15 {
+			extra = nbits - 15
+		}
+		if br := 26 + 3*extra; br < best {
+			best = br
+		}
+	}
+	if len(w) >= 4 && len(w)%2 == 0 {
+		mid := len(w) / 2
+		if sp := m.templateK(w[:mid]) + m.templateK(w[mid:]) - 3; sp < best {
+			best = sp
+		}
+	}
+	m.tmpl[key] = best
+	return best
+}
+
+func unaryByteBits(w []byte) bool {
+	if len(w) == 0 {
+		return false
+	}
+	for _, b := range w {
+		if b != 0 && b != 0xff {
+			return false
+		}
+		if b != w[0] {
+			return false
+		}
+	}
+	return true
+}
+
+func codeLen(p float64) int {
+	if p >= 1 {
+		return 1
+	}
+	if p <= 0 {
+		return 62
+	}
+	l := int(math.Ceil(-math.Log2(p) - 1e-9))
+	if l < 1 {
+		return 1
+	}
+	if l > 62 {
+		return 62
+	}
+	return l
+}
+
+// CodeLen is the conditional program length of b after w, in bits.
+func (m *PhraseKLM) CodeLen(w []byte, b byte) int {
+	ell := make([]int, len(m.Alphabet))
+	m.codeLens(w, ell)
+	for i, a := range m.Alphabet {
+		if a == b {
+			return ell[i]
+		}
+	}
+	return 62
+}
+
+func (m *PhraseKLM) codeLens(w []byte, ell []int) {
+	cc := m.ctx[byteKeyOf(w)]
+	if cc == nil {
+		m.templateLens(w, ell)
+		return
+	}
+	t := len(cc.succ)
+	if t == 0 || cc.total == 0 {
+		m.templateLens(w, ell)
+		return
+	}
+	nUnseen := 0
+	for _, b := range m.Alphabet {
+		if cc.succ[b] == 0 {
+			nUnseen++
+		}
+	}
+	denom := float64(cc.total + t)
+	if nUnseen == 0 {
+		for i, b := range m.Alphabet {
+			ell[i] = codeLen(float64(cc.succ[b]) / float64(cc.total))
+		}
+		return
+	}
+	pEsc := float64(t) / denom
+	var buf [8]byte
+	copy(buf[:len(w)], w)
+	tw := m.templateK(buf[:len(w)])
+	weight := make([]float64, len(ell))
+	var z float64
+	for i, b := range m.Alphabet {
+		if cc.succ[b] > 0 {
+			continue
+		}
+		buf[len(w)] = b
+		dt := m.templateK(buf[:len(w)+1]) - tw
+		weight[i] = math.Exp2(-float64(dt))
+		z += weight[i]
+	}
+	if z == 0 {
+		z = 1
+	}
+	for i, b := range m.Alphabet {
+		if c := cc.succ[b]; c > 0 {
+			ell[i] = codeLen(float64(c) / denom)
+		} else {
+			ell[i] = codeLen(pEsc * weight[i] / z)
+		}
+	}
+}
+
+func (m *PhraseKLM) templateLens(w []byte, ell []int) {
+	var buf [8]byte
+	copy(buf[:len(w)], w)
+	tw := m.templateK(buf[:len(w)])
+	weight := make([]float64, len(ell))
+	var z float64
+	for i, b := range m.Alphabet {
+		buf[len(w)] = b
+		dt := m.templateK(buf[:len(w)+1]) - tw
+		weight[i] = math.Exp2(-float64(dt))
+		z += weight[i]
+	}
+	if z == 0 {
+		z = 1
+	}
+	for i := range ell {
+		ell[i] = codeLen(weight[i] / z)
+	}
+}
+
+func (m *PhraseKLM) pass(text []byte) (nll float64, correct, scored, total int) {
+	if len(text) <= m.Window {
+		return 0, 0, 0, 0
+	}
+	nClass := len(m.Alphabet)
+	logits := make([]float32, nClass)
+	probs := make([]float32, nClass)
+	ell := make([]int, nClass)
+	ln2 := float32(math.Ln2)
+	var buf [8]byte
+	for i := m.Window; i < len(text); i++ {
+		total++
+		class := m.ClassOf[text[i]]
+		if class < 0 {
+			continue
+		}
+		scored++
+		copy(buf[:m.Window], text[i-m.Window:i])
+		m.codeLens(buf[:m.Window], ell)
+		for c, bits := range ell {
+			logits[c] = -float32(bits) * ln2
+		}
+		loss, hit := softmaxStep(logits, probs, class)
+		nll += float64(loss)
+		if hit {
+			correct++
+		}
+	}
+	return nll, correct, scored, total
+}
+
+// TrainPhraseKLM counts training windows and scores the next byte by the
+// length of its phrase program. The train columns are that code's loss
+// on the training bytes, not an SGD fit.
+func TrainPhraseKLM(text []byte, cfg LMConfig) (*PhraseKLM, LMReport, error) {
+	cfg.norm()
+	if cfg.Window > 7 {
+		return nil, LMReport{}, errDKWindow
+	}
+	train, valid, err := splitCorpus(text, cfg)
+	if err != nil {
+		return nil, LMReport{}, err
+	}
+	classOf, alphabet := newAlphabet(train)
+	m := &PhraseKLM{
+		Window:   cfg.Window,
+		ClassOf:  classOf,
+		Alphabet: alphabet,
+		ctx:      make(map[byteKey]*phraseCond),
+		tmpl:     make(map[byteKey]int),
+	}
+	for i := cfg.Window; i < len(train); i++ {
+		key := byteKeyOf(train[i-cfg.Window : i])
+		cc := m.ctx[key]
+		if cc == nil {
+			cc = &phraseCond{succ: make(map[byte]int)}
+			m.ctx[key] = cc
+		}
+		cc.total++
+		cc.succ[train[i]]++
+	}
+	nll, c, s, t := m.pass(train)
+	vnll, vc, vs, vt := m.pass(valid)
+	cfg.Epochs = 1
+	rep, err := finishReport("phrase", cfg, 1, nll, c, s, t, vnll, vc, vs, vt)
+	return m, rep, err
+}
+
+// ComparePhraseK scores the phrase code and trains the one-hot model
+// on the same split.
+func ComparePhraseK(text []byte, cfg LMConfig) (*PhraseKLM, LMReport, LMReport, error) {
+	ph, prep, err := TrainPhraseKLM(text, cfg)
+	if err != nil {
+		return nil, LMReport{}, LMReport{}, err
+	}
+	_, hot, err := TrainOneHotLM(text, cfg)
+	if err != nil {
+		return nil, LMReport{}, LMReport{}, err
+	}
+	return ph, prep, hot, nil
+}
+
 // CompareContextModels trains the span-program model and the one-hot
 // model on the same split, with the same rate, epochs, and seed.
 func CompareContextModels(text []byte, cfg LMConfig) (*SpanLM, LMReport, LMReport, error) {

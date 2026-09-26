@@ -41,10 +41,10 @@ go run ./cmd/hypercomputer -demo=lm -text=pg100.txt
 ```
 
 `lm` compares two next-byte models on The Complete Works of William
-Shakespeare. One scores each candidate by the change in U program
-length, ΔK = K(window·byte) − K(window); a repeated byte is a counted
-loop. The other is a one-hot window of the same width. The last tenth
-of the book is validation for both.
+Shakespeare. One gives each training window a short prefix-free program
+and scores the next byte by that code length; an unseen continuation
+keeps the listing, byte-run, or splice. The other is a one-hot window
+of the same width. The last tenth of the book is validation for both.
 
 Long bit strings go through `KDivideConquer`: each block is solved once
 (listing, repeat, or the bounded search) and the prefix-free programs are

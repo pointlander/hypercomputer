@@ -159,6 +159,47 @@ func TestDeltaKVsOneHotShakespeareSlice(t *testing.T) {
 	}
 }
 
+func TestPhraseCodePrefersSeenContinuation(t *testing.T) {
+	text := bytes.Repeat([]byte("the "), 800)
+	m, rep, err := TrainPhraseKLM(text, LMConfig{
+		Window: 4, ValidFrac: 0.1, MaxBits: 8, Bound: 64, Prec: 64, Seed: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := []byte("the ")
+	if m.CodeLen(ctx, 't') >= m.CodeLen(ctx, 'q') {
+		t.Fatalf("seen 't' costs %d, unseen 'q' costs %d", m.CodeLen(ctx, 't'), m.CodeLen(ctx, 'q'))
+	}
+	if rep.ValidAcc < 0.9 || rep.ValidPPL >= 3 {
+		t.Fatalf("valid acc %.3f ppl %.2f", rep.ValidAcc, rep.ValidPPL)
+	}
+}
+
+func TestPhraseVsOneHotShakespeareSlice(t *testing.T) {
+	text, err := LoadCorpus("pg100.txt")
+	if err != nil {
+		t.Skip(err)
+	}
+	m, phrase, hot, err := ComparePhraseK(text[:40000], LMConfig{
+		Window: 4, Epochs: 1, Rate: 0.1, ValidFrac: 0.1,
+		MaxBits: 8, Bound: 64, Prec: 64, Seed: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if phrase.Kind != "phrase" || hot.Kind != "onehot" || phrase.ValidN != hot.ValidN {
+		t.Fatalf("phrase %+v onehot %+v", phrase, hot)
+	}
+	ctx := []byte("the ")
+	if m.CodeLen(ctx, ' ') == m.CodeLen(ctx, 'q') && m.CodeLen(ctx, 'e') == m.CodeLen(ctx, 'q') {
+		t.Fatalf("flat code the : space %d e %d q %d", m.CodeLen(ctx, ' '), m.CodeLen(ctx, 'e'), m.CodeLen(ctx, 'q'))
+	}
+	if phrase.ValidPPL < 1 || phrase.ValidPPL >= 80 || hot.ValidPPL >= 80 {
+		t.Fatalf("phrase ppl %.2f onehot ppl %.2f", phrase.ValidPPL, hot.ValidPPL)
+	}
+}
+
 func TestSpanVsOneHotLearnsCycle(t *testing.T) {
 	var text []byte
 	for i := 0; i < 3000; i++ {
