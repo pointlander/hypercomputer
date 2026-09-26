@@ -578,6 +578,133 @@ func TrainOneHotLM(text []byte, cfg LMConfig) (*OneHotLM, LMReport, error) {
 	return m, rep, err
 }
 
+// DeltaKLM scores the next byte by ΔK = K(wb) − K(w). The templates are
+// the same ones the span model uses (listing, bit-repeat, byte-run,
+// splice). Windows longer than 7 bytes are not packed into the cache.
+type DeltaKLM struct {
+	Window   int
+	ClassOf  [256]int
+	Alphabet []byte
+	search   *uSearcher
+	kcache   map[string]*KResult
+	kPack    map[byteKey]int
+	prove    int
+}
+
+type byteKey struct {
+	n byte
+	b [8]byte
+}
+
+func byteKeyOf(w []byte) byteKey {
+	var k byteKey
+	k.n = byte(len(w))
+	copy(k.b[:], w)
+	return k
+}
+
+func (m *DeltaKLM) complexity(w []byte) int {
+	key := byteKeyOf(w)
+	if k, ok := m.kPack[key]; ok {
+		return k
+	}
+	bits := windowBits(w)
+	r := m.search.divide(bits, DefaultKLeaf, m.prove, m.kcache)
+	k := r.K
+	if k < 0 {
+		k = 3 * (len(bits) + 1)
+	}
+	m.kPack[key] = k
+	return k
+}
+
+// Delta is K(w followed by b) − K(w). A smaller value is a cheaper continuation.
+func (m *DeltaKLM) Delta(w []byte, b byte) int {
+	buf := make([]byte, len(w)+1)
+	copy(buf, w)
+	buf[len(w)] = b
+	return m.complexity(buf) - m.complexity(w)
+}
+
+func (m *DeltaKLM) pass(text []byte) (nll float64, correct, scored, total int) {
+	if len(text) <= m.Window {
+		return 0, 0, 0, 0
+	}
+	nClass := len(m.Alphabet)
+	logits := make([]float32, nClass)
+	probs := make([]float32, nClass)
+	ln2 := float32(math.Ln2)
+	var buf [8]byte
+	for i := m.Window; i < len(text); i++ {
+		total++
+		class := m.ClassOf[text[i]]
+		if class < 0 {
+			continue
+		}
+		scored++
+		copy(buf[:m.Window], text[i-m.Window:i])
+		kw := m.complexity(buf[:m.Window])
+		for c, b := range m.Alphabet {
+			buf[m.Window] = b
+			delta := m.complexity(buf[:m.Window+1]) - kw
+			logits[c] = -float32(delta) * ln2
+		}
+		loss, hit := softmaxStep(logits, probs, class)
+		nll += float64(loss)
+		if hit {
+			correct++
+		}
+	}
+	return nll, correct, scored, total
+}
+
+// TrainDeltaKLM evaluates the parameter-free ΔK distribution on the
+// same split as the linear models. The train columns are that
+// distribution's loss on the training bytes, not an SGD fit.
+func TrainDeltaKLM(text []byte, cfg LMConfig) (*DeltaKLM, LMReport, error) {
+	cfg.norm()
+	if cfg.Window > 7 {
+		return nil, LMReport{}, errDKWindow
+	}
+	train, valid, err := splitCorpus(text, cfg)
+	if err != nil {
+		return nil, LMReport{}, err
+	}
+	classOf, alphabet := newAlphabet(train)
+	m := &DeltaKLM{
+		Window:   cfg.Window,
+		ClassOf:  classOf,
+		Alphabet: alphabet,
+		search:   &uSearcher{maxBits: cfg.MaxBits, bound: cfg.Bound},
+		kcache:   make(map[string]*KResult),
+		kPack:    make(map[byteKey]int),
+		prove:    cfg.Bound,
+	}
+	need := 6*8*(cfg.Window+1) + 64
+	if m.prove < need {
+		m.prove = need
+	}
+	m.search.init(cfg.Prec)
+	nll, c, s, t := m.pass(train)
+	vnll, vc, vs, vt := m.pass(valid)
+	cfg.Epochs = 1
+	rep, err := finishReport("deltak", cfg, 1, nll, c, s, t, vnll, vc, vs, vt)
+	return m, rep, err
+}
+
+// CompareDeltaK evaluates ΔK and trains the one-hot model on the same split.
+func CompareDeltaK(text []byte, cfg LMConfig) (*DeltaKLM, LMReport, LMReport, error) {
+	dk, drep, err := TrainDeltaKLM(text, cfg)
+	if err != nil {
+		return nil, LMReport{}, LMReport{}, err
+	}
+	_, hot, err := TrainOneHotLM(text, cfg)
+	if err != nil {
+		return nil, LMReport{}, LMReport{}, err
+	}
+	return dk, drep, hot, nil
+}
+
 // CompareContextModels trains the span-program model and the one-hot
 // model on the same split, with the same rate, epochs, and seed.
 func CompareContextModels(text []byte, cfg LMConfig) (*SpanLM, LMReport, LMReport, error) {
@@ -707,3 +834,4 @@ type lmError string
 func (e lmError) Error() string { return string(e) }
 
 const errCorpusShort lmError = "corpus shorter than the context window"
+const errDKWindow lmError = "ΔK cache packs at most 7 context bytes"

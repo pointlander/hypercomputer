@@ -121,6 +121,44 @@ func TestSpanByteRunSpaces(t *testing.T) {
 	}
 }
 
+func TestDeltaKContinuesByteRun(t *testing.T) {
+	text := append([]byte("hello "), bytes.Repeat([]byte{' '}, 2000)...)
+	m, rep, err := TrainDeltaKLM(text, LMConfig{
+		Window: 4, ValidFrac: 0.1, MaxBits: 8, Bound: 64, Prec: 64, Seed: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dSpace := m.Delta([]byte("    "), ' ')
+	dE := m.Delta([]byte("    "), 'e')
+	if dSpace >= dE {
+		t.Fatalf("continuing a space run costs %d, breaking it costs %d", dSpace, dE)
+	}
+	if rep.ValidAcc < 0.9 || rep.ValidPPL >= 2 {
+		t.Fatalf("valid acc %.3f ppl %.2f", rep.ValidAcc, rep.ValidPPL)
+	}
+}
+
+func TestDeltaKVsOneHotShakespeareSlice(t *testing.T) {
+	text, err := LoadCorpus("pg100.txt")
+	if err != nil {
+		t.Skip(err)
+	}
+	_, dk, hot, err := CompareDeltaK(text[:40000], LMConfig{
+		Window: 4, Epochs: 1, Rate: 0.1, ValidFrac: 0.1,
+		MaxBits: 8, Bound: 64, Prec: 64, Seed: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dk.Kind != "deltak" || hot.Kind != "onehot" || dk.ValidN != hot.ValidN {
+		t.Fatalf("dk %+v onehot %+v", dk, hot)
+	}
+	if dk.ValidPPL < 1 || dk.ValidPPL >= 120 || hot.ValidPPL >= 80 {
+		t.Fatalf("dk ppl %.2f onehot ppl %.2f", dk.ValidPPL, hot.ValidPPL)
+	}
+}
+
 func TestSpanVsOneHotLearnsCycle(t *testing.T) {
 	var text []byte
 	for i := 0; i < 3000; i++ {

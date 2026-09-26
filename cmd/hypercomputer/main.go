@@ -294,7 +294,7 @@ func demoKComplexity(prec uint, kstring string, kbits int) {
 }
 
 func demoLM(path string, prec uint, kbits int) {
-	fmt.Println("== context program vs one-hot next-byte LM ==")
+	fmt.Println("== ΔK vs one-hot next-byte LM ==")
 	body, err := hc.LoadCorpus(path)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "lm: %v\n", err)
@@ -303,7 +303,7 @@ func demoLM(path string, prec uint, kbits int) {
 	if kbits < 1 {
 		kbits = 12
 	}
-	span, spanRep, hotRep, err := hc.CompareContextModels(body, hc.LMConfig{
+	dk, dkRep, hotRep, err := hc.CompareDeltaK(body, hc.LMConfig{
 		MaxBits: kbits,
 		Prec:    prec,
 	})
@@ -312,15 +312,22 @@ func demoLM(path string, prec uint, kbits int) {
 		os.Exit(1)
 	}
 	fmt.Printf("corpus %s  body %d bytes  alphabet %d  window %d\n",
-		path, len(body), len(span.Alphabet), span.Window)
-	for _, ex := range []string{"    ", "the ", "\n\n\n\n"} {
-		prog, how, k := span.WindowProgram([]byte(ex))
-		fmt.Printf("  %q  K=%d via %s  |p|=%d\n", ex, k, how, len(prog))
+		path, len(body), len(dk.Alphabet), dk.Window)
+	for _, ex := range []struct {
+		ctx string
+		b   byte
+	}{
+		{"    ", ' '},
+		{"    ", 'e'},
+		{"the ", ' '},
+		{"\n\n\n\n", '\n'},
+	} {
+		fmt.Printf("  ΔK(%q | %q) = %d\n", ex.b, ex.ctx, dk.Delta([]byte(ex.ctx), ex.b))
 	}
-	fmt.Printf("span    features %d  train ppl %.2f acc %.3f  valid ppl %.2f acc %.3f\n",
-		spanRep.Dim, spanRep.TrainPPL, spanRep.TrainAcc, spanRep.ValidPPL, spanRep.ValidAcc)
-	fmt.Printf("one-hot features %d  train ppl %.2f acc %.3f  valid ppl %.2f acc %.3f\n",
-		hotRep.Dim, hotRep.TrainPPL, hotRep.TrainAcc, hotRep.ValidPPL, hotRep.ValidAcc)
+	fmt.Printf("ΔK      train ppl %.2f acc %.3f  valid ppl %.2f acc %.3f\n",
+		dkRep.TrainPPL, dkRep.TrainAcc, dkRep.ValidPPL, dkRep.ValidAcc)
+	fmt.Printf("one-hot train ppl %.2f acc %.3f  valid ppl %.2f acc %.3f\n",
+		hotRep.TrainPPL, hotRep.TrainAcc, hotRep.ValidPPL, hotRep.ValidAcc)
 	fmt.Println()
 }
 
