@@ -25,7 +25,7 @@
 //   - Kolmogorov complexity of bit strings via the analog halt oracle,
 //     with a divide-and-conquer upper bound for long strings
 //   - a next-byte language model on the Gutenberg Shakespeare text,
-//     scoring a short program per training window against a one-hot window
+//     comparing a variable-order phrase code with a fixed 4-byte code
 //   - Chaitin reconstruction of K_U from analog bits of Ω_U
 //   - a p×T resource sweep: analog Ω bits and dovetail bound vs certified K_U
 //

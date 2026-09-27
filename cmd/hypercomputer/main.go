@@ -294,7 +294,7 @@ func demoKComplexity(prec uint, kstring string, kbits int) {
 }
 
 func demoLM(path string, prec uint, kbits int) {
-	fmt.Println("== phrase code vs one-hot next-byte LM ==")
+	fmt.Println("== variable-order phrase code vs 4-byte ==")
 	body, err := hc.LoadCorpus(path)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "lm: %v\n", err)
@@ -303,7 +303,7 @@ func demoLM(path string, prec uint, kbits int) {
 	if kbits < 1 {
 		kbits = 12
 	}
-	ph, phRep, hotRep, err := hc.ComparePhraseK(body, hc.LMConfig{
+	vp, vrep, fixed, frep, err := hc.CompareVarPhrase(body, hc.LMConfig{
 		MaxBits: kbits,
 		Prec:    prec,
 	})
@@ -311,24 +311,18 @@ func demoLM(path string, prec uint, kbits int) {
 		fmt.Fprintf(os.Stderr, "lm: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("corpus %s  body %d bytes  alphabet %d  window %d\n",
-		path, len(body), len(ph.Alphabet), ph.Window)
-	for _, ex := range []struct {
-		ctx string
-		b   byte
-	}{
-		{"the ", ' '},
-		{"the ", 'e'},
-		{"the ", 'q'},
-		{"    ", ' '},
-		{"    ", 'e'},
-	} {
-		fmt.Printf("  |p|(%q | %q) = %d\n", ex.b, ex.ctx, ph.CodeLen([]byte(ex.ctx), ex.b))
-	}
-	fmt.Printf("phrase  train ppl %.2f acc %.3f  valid ppl %.2f acc %.3f\n",
-		phRep.TrainPPL, phRep.TrainAcc, phRep.ValidPPL, phRep.ValidAcc)
-	fmt.Printf("one-hot train ppl %.2f acc %.3f  valid ppl %.2f acc %.3f\n",
-		hotRep.TrainPPL, hotRep.TrainAcc, hotRep.ValidPPL, hotRep.ValidAcc)
+	fmt.Printf("corpus %s  body %d bytes  alphabet %d\n",
+		path, len(body), len(vp.Alphabet))
+	long := "[_Exeunt"
+	short := "eunt"
+	fmt.Printf("  |p|16(%q | %q) = %d\n", byte('.'), long, vp.CodeLen([]byte(long), '.'))
+	fmt.Printf("  |p|4(%q | %q) = %d\n", byte('.'), short, fixed.CodeLen([]byte(short), '.'))
+	fmt.Printf("  |p|16(%q | %q) = %d\n", byte(' '), "    ", vp.CodeLen([]byte("    "), ' '))
+	fmt.Printf("  |p|4(%q | %q) = %d\n", byte(' '), "    ", fixed.CodeLen([]byte("    "), ' '))
+	fmt.Printf("var-order %d  train ppl %.2f acc %.3f  valid ppl %.2f acc %.3f\n",
+		vrep.Window, vrep.TrainPPL, vrep.TrainAcc, vrep.ValidPPL, vrep.ValidAcc)
+	fmt.Printf("4-byte       train ppl %.2f acc %.3f  valid ppl %.2f acc %.3f\n",
+		frep.TrainPPL, frep.TrainAcc, frep.ValidPPL, frep.ValidAcc)
 	fmt.Println()
 }
 

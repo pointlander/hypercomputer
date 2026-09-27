@@ -964,6 +964,257 @@ func ComparePhraseK(text []byte, cfg LMConfig) (*PhraseKLM, LMReport, LMReport, 
 	return ph, prep, hot, nil
 }
 
+// DefaultVarOrder is the longest context suffix of the variable-order code.
+const DefaultVarOrder = 16
+
+// ppmMinCount is the smallest number of times a longer context must have
+// occurred before its program is used. A suffix seen once is skipped so
+// the escape does not stop on a unique string.
+const ppmMinCount = 2
+
+// VarPhrase is a variable-order phrase code. The next byte is coded from
+// the longest context suffix that occurred at least ppmMinCount times in
+// training. A byte never seen there escapes to the next-shorter suffix.
+// The empty suffix is the unigram.
+type VarPhrase struct {
+	Max      int
+	ClassOf  [256]int
+	Alphabet []byte
+	ctx      map[ctxKey]tally
+	mix      map[ctxKey]map[byte]uint32
+	base     *PhraseKLM
+}
+
+// ctxKey is a context of at most DefaultVarOrder bytes.
+type ctxKey struct {
+	n uint8
+	b [DefaultVarOrder]byte
+}
+
+type tally struct {
+	total uint32
+	sym   byte
+	pure  bool
+}
+
+func suffixKey(ctx []byte, k int) ctxKey {
+	var key ctxKey
+	key.n = uint8(k)
+	copy(key.b[:k], ctx[len(ctx)-k:])
+	return key
+}
+
+func addTally(tallies map[ctxKey]tally, mixed map[ctxKey]map[byte]uint32, key ctxKey, s byte) {
+	t := tallies[key]
+	if t.total == 0 {
+		tallies[key] = tally{total: 1, sym: s, pure: true}
+		return
+	}
+	t.total++
+	if t.pure {
+		if t.sym != s {
+			mixed[key] = map[byte]uint32{t.sym: t.total - 1, s: 1}
+			t.pure = false
+		}
+	} else {
+		mixed[key][s]++
+	}
+	tallies[key] = t
+}
+
+func (m *VarPhrase) observe(text []byte) {
+	maxO := m.Max
+	tallies := make(map[ctxKey]tally, len(text))
+	mixed := make(map[ctxKey]map[byte]uint32)
+	for i := 0; i < len(text); i++ {
+		s := text[i]
+		lim := i
+		if lim > maxO {
+			lim = maxO
+		}
+		// Orders 1..4 live in the fixed phrase code. Only longer
+		// suffixes are counted here.
+		for k := 5; k <= lim; k++ {
+			addTally(tallies, mixed, suffixKey(text[i-k:i], k), s)
+		}
+	}
+	kept := make(map[ctxKey]tally)
+	keptMix := make(map[ctxKey]map[byte]uint32)
+	for key, t := range tallies {
+		if t.total < ppmMinCount {
+			continue
+		}
+		kept[key] = t
+		if mm, ok := mixed[key]; ok {
+			keptMix[key] = mm
+		}
+	}
+	m.ctx = kept
+	m.mix = keptMix
+}
+
+// CodeLen is the conditional program length of b after w, in bits.
+// w may be longer than Max; only its Max-byte suffix is used.
+func (m *VarPhrase) CodeLen(w []byte, b byte) int {
+	if len(w) > m.Max {
+		w = w[len(w)-m.Max:]
+	}
+	ell := make([]int, len(m.Alphabet))
+	m.codeLens(w, ell)
+	for i, a := range m.Alphabet {
+		if a == b {
+			return ell[i]
+		}
+	}
+	return 62
+}
+
+func (m *VarPhrase) codeLens(ctx []byte, ell []int) {
+	n := len(m.Alphabet)
+	baseCtx := ctx
+	if len(baseCtx) > 4 {
+		baseCtx = baseCtx[len(baseCtx)-4:]
+	}
+	if m.base != nil && len(baseCtx) == 4 {
+		m.base.codeLens(baseCtx, ell)
+	} else {
+		u := codeLen(1 / float64(n))
+		for i := range ell {
+			ell[i] = u
+		}
+	}
+	lim := len(ctx)
+	if lim > m.Max {
+		lim = m.Max
+	}
+	var used tally
+	var mix map[byte]uint32
+	found := false
+	for k := lim; k >= 5; k-- {
+		t, ok := m.ctx[suffixKey(ctx, k)]
+		if !ok || t.total < ppmMinCount {
+			continue
+		}
+		used = t
+		mix = m.mix[suffixKey(ctx, k)]
+		found = true
+		break
+	}
+	if !found {
+		return
+	}
+	kinds := 1
+	if !used.pure {
+		kinds = len(mix)
+	}
+	denom := float64(used.total + uint32(kinds))
+	esc := float64(kinds) / denom
+	raw := make([]float64, n)
+	if used.pure {
+		if idx := m.ClassOf[used.sym]; idx >= 0 {
+			raw[idx] = float64(used.total) / denom
+		}
+	} else {
+		for b, c := range mix {
+			if idx := m.ClassOf[b]; idx >= 0 && c > 0 {
+				raw[idx] = float64(c) / denom
+			}
+		}
+	}
+	for i := range raw {
+		if raw[i] == 0 {
+			raw[i] = esc * math.Exp2(-float64(ell[i]))
+		}
+	}
+	var sum float64
+	for _, p := range raw {
+		sum += p
+	}
+	if sum <= 0 {
+		sum = 1
+	}
+	for i := range ell {
+		ell[i] = codeLen(raw[i] / sum)
+	}
+}
+
+func (m *VarPhrase) pass(text []byte) (nll float64, correct, scored, total int) {
+	if len(text) == 0 {
+		return 0, 0, 0, 0
+	}
+	nClass := len(m.Alphabet)
+	logits := make([]float32, nClass)
+	probs := make([]float32, nClass)
+	ell := make([]int, nClass)
+	ln2 := float32(math.Ln2)
+	for i := 4; i < len(text); i++ {
+		total++
+		class := m.ClassOf[text[i]]
+		if class < 0 {
+			continue
+		}
+		scored++
+		start := 0
+		if i > m.Max {
+			start = i - m.Max
+		}
+		m.codeLens(text[start:i], ell)
+		for c, bits := range ell {
+			logits[c] = -float32(bits) * ln2
+		}
+		loss, hit := softmaxStep(logits, probs, class)
+		nll += float64(loss)
+		if hit {
+			correct++
+		}
+	}
+	return nll, correct, scored, total
+}
+
+// TrainVarPhrase builds the variable-order code on the training half.
+// It also returns the fixed 4-byte code trained on that same split.
+func TrainVarPhrase(text []byte, cfg LMConfig) (*VarPhrase, LMReport, *PhraseKLM, LMReport, error) {
+	cfg.norm()
+	train, _, err := splitCorpus(text, cfg)
+	if err != nil {
+		return nil, LMReport{}, nil, LMReport{}, err
+	}
+	classOf, alphabet := newAlphabet(train)
+	fixedCfg := cfg
+	fixedCfg.Window = 4
+	base, brep, err := TrainPhraseKLM(text, fixedCfg)
+	if err != nil {
+		return nil, LMReport{}, nil, LMReport{}, err
+	}
+	m := &VarPhrase{
+		Max:      DefaultVarOrder,
+		ClassOf:  classOf,
+		Alphabet: alphabet,
+		base:     base,
+	}
+	m.observe(train)
+	nll, c, s, t := m.pass(train)
+	vnll, vc, vs, vt := m.pass(validSplit(text, cfg))
+	cfg.Window = m.Max
+	cfg.Epochs = 1
+	rep, err := finishReport("varphrase", cfg, m.Max, nll, c, s, t, vnll, vc, vs, vt)
+	return m, rep, base, brep, err
+}
+
+func validSplit(text []byte, cfg LMConfig) []byte {
+	_, valid, err := splitCorpus(text, cfg)
+	if err != nil {
+		return nil
+	}
+	return valid
+}
+
+// CompareVarPhrase scores the variable-order code against the fixed
+// 4-byte phrase code on the same split.
+func CompareVarPhrase(text []byte, cfg LMConfig) (*VarPhrase, LMReport, *PhraseKLM, LMReport, error) {
+	return TrainVarPhrase(text, cfg)
+}
+
 // CompareContextModels trains the span-program model and the one-hot
 // model on the same split, with the same rate, epochs, and seed.
 func CompareContextModels(text []byte, cfg LMConfig) (*SpanLM, LMReport, LMReport, error) {

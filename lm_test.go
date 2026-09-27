@@ -200,6 +200,47 @@ func TestPhraseVsOneHotShakespeareSlice(t *testing.T) {
 	}
 }
 
+func TestVarPhraseBeatsFixedOrder(t *testing.T) {
+	var text []byte
+	for i := 0; i < 200; i++ {
+		text = append(text, []byte("xxAAAAz")...)
+		text = append(text, 'y', 'y', 'A', 'A', 'A', 'A', byte('a'+i%14))
+	}
+	vp, vrep, fixed, frep, err := CompareVarPhrase(text, LMConfig{
+		ValidFrac: 0.1, MaxBits: 8, Bound: 64, Prec: 64, Seed: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	longZ := vp.CodeLen([]byte("xxAAAA"), 'z')
+	shortZ := fixed.CodeLen([]byte("AAAA"), 'z')
+	if longZ >= shortZ {
+		t.Fatalf("long context |p|=%d, 4-byte |p|=%d", longZ, shortZ)
+	}
+	if vrep.ValidPPL >= frep.ValidPPL {
+		t.Fatalf("var ppl %.2f  4-byte ppl %.2f", vrep.ValidPPL, frep.ValidPPL)
+	}
+}
+
+func TestVarPhraseShakespeareSlice(t *testing.T) {
+	text, err := LoadCorpus("pg100.txt")
+	if err != nil {
+		t.Skip(err)
+	}
+	_, vrep, _, frep, err := CompareVarPhrase(text[:50000], LMConfig{
+		ValidFrac: 0.1, MaxBits: 8, Bound: 64, Prec: 64, Seed: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if vrep.Kind != "varphrase" || frep.Kind != "phrase" {
+		t.Fatalf("%s %s", vrep.Kind, frep.Kind)
+	}
+	if vrep.ValidPPL < 1 || vrep.ValidPPL >= 40 || frep.ValidPPL >= 80 {
+		t.Fatalf("var ppl %.2f  4-byte ppl %.2f", vrep.ValidPPL, frep.ValidPPL)
+	}
+}
+
 func TestSpanVsOneHotLearnsCycle(t *testing.T) {
 	var text []byte
 	for i := 0; i < 3000; i++ {
