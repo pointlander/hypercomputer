@@ -159,6 +159,49 @@ func TestDeltaKVsOneHotShakespeareSlice(t *testing.T) {
 	}
 }
 
+func TestPhraseCodeFeedsK(t *testing.T) {
+	text := bytes.Repeat([]byte("the "), 400)
+	m, _, err := TrainPhraseKLM(text, LMConfig{
+		Window: 4, ValidFrac: 0.1, MaxBits: 8, Bound: 64, Prec: 64, Seed: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.book == nil || !m.book.PrefixFree() {
+		t.Fatal("phrase book is not prefix-free")
+	}
+	w := []byte("the ")
+	prog, k, how := m.WindowK(w)
+	bits := windowBits(w)
+	listing := len(ListingProgram(bits))
+	if how != "phrase" || k <= 0 || k >= listing {
+		t.Fatalf("K(%q)=%d via %s, listing %d", w, k, how, listing)
+	}
+	if m.templateK(w) != k {
+		t.Fatalf("templateK %d, windowK %d", m.templateK(w), k)
+	}
+	got, ok := m.book.Run(prog)
+	if !ok || !bitsEq(got, bits) {
+		t.Fatalf("codeword does not expand to the window")
+	}
+}
+
+func TestPhraseBookShakespeare(t *testing.T) {
+	text, err := LoadCorpus("pg100.txt")
+	if err != nil {
+		t.Skip(err)
+	}
+	book := NewPhraseBook(text[:len(text)*9/10], 4)
+	w := []byte("the ")
+	k := book.BitLen(w)
+	listing := len(ListingProgram(windowBits(w)))
+	got, ok := book.Run(book.Program(w))
+	if k <= 0 || k >= listing || !ok || !bitsEq(got, windowBits(w)) {
+		t.Fatalf("K(%q)=%d listing %d ok %v", w, k, listing, ok)
+	}
+	t.Logf("K(%q)=%d via phrase, listing %d", w, k, listing)
+}
+
 func TestPhraseCodePrefersSeenContinuation(t *testing.T) {
 	text := bytes.Repeat([]byte("the "), 800)
 	m, rep, err := TrainPhraseKLM(text, LMConfig{

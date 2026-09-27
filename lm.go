@@ -9,6 +9,8 @@ import (
 	"math"
 	"math/rand/v2"
 	"os"
+	"sort"
+	"strings"
 )
 
 const (
@@ -716,6 +718,7 @@ type PhraseKLM struct {
 	Alphabet []byte
 	ctx      map[byteKey]*phraseCond
 	tmpl     map[byteKey]int
+	book     *PhraseBook
 }
 
 type phraseCond struct {
@@ -763,8 +766,203 @@ func (m *PhraseKLM) templateK(w []byte) int {
 			best = sp
 		}
 	}
+	if m.book != nil {
+		if n := m.book.BitLen(w); n > 0 && n < best {
+			best = n
+		}
+	}
 	m.tmpl[key] = best
 	return best
+}
+
+// PhraseBook is a prefix-free code for the training windows. Each
+// codeword is a real bit string; looking it up yields the window bits.
+// K may use the codeword when it is shorter than a listing, byte-run, or splice.
+type PhraseBook struct {
+	prog map[byteKey][]bool
+	dec  map[string][]bool
+}
+
+// NewPhraseBook assigns Shannon codewords to every window of length
+// window and window+1 in text.
+func NewPhraseBook(text []byte, window int) *PhraseBook {
+	counts := make(map[byteKey]int)
+	rawOf := make(map[byteKey][]byte)
+	add := func(w []byte) {
+		if len(w) == 0 || len(w) > 8 {
+			return
+		}
+		key := byteKeyOf(w)
+		if counts[key] == 0 {
+			rawOf[key] = append([]byte(nil), w...)
+		}
+		counts[key]++
+	}
+	if window < 1 {
+		window = 4
+	}
+	for _, n := range []int{window, window + 1} {
+		if n > 8 || len(text) < n {
+			continue
+		}
+		for i := 0; i+n <= len(text); i++ {
+			add(text[i : i+n])
+		}
+	}
+	type item struct {
+		key   byteKey
+		count int
+		ell   int
+		raw   []byte
+	}
+	total := 0
+	items := make([]item, 0, len(counts))
+	for key, c := range counts {
+		total += c
+		items = append(items, item{key: key, count: c, raw: rawOf[key]})
+	}
+	if total == 0 {
+		return &PhraseBook{prog: map[byteKey][]bool{}, dec: map[string][]bool{}}
+	}
+	for i := range items {
+		items[i].ell = codeLen(float64(items[i].count) / float64(total))
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].ell != items[j].ell {
+			return items[i].ell < items[j].ell
+		}
+		return bytes.Compare(items[i].raw, items[j].raw) < 0
+	})
+	book := &PhraseBook{
+		prog: make(map[byteKey][]bool, len(items)),
+		dec:  make(map[string][]bool, len(items)),
+	}
+	var code uint64
+	prev := 0
+	for i, it := range items {
+		if i == 0 {
+			prev = it.ell
+		} else {
+			code++
+			if it.ell > prev {
+				code <<= uint(it.ell - prev)
+			}
+			prev = it.ell
+		}
+		word := u64Bits(code, it.ell)
+		book.prog[it.key] = word
+		book.dec[FormatBits(word)] = windowBits(it.raw)
+	}
+	return book
+}
+
+// BitLen is the phrase-codeword length of w, or 0 if w is not in the book.
+func (b *PhraseBook) BitLen(w []byte) int {
+	if b == nil {
+		return 0
+	}
+	prog, ok := b.prog[byteKeyOf(w)]
+	if !ok {
+		return 0
+	}
+	return len(prog)
+}
+
+// Program is the codeword for w.
+func (b *PhraseBook) Program(w []byte) []bool {
+	if b == nil {
+		return nil
+	}
+	return b.prog[byteKeyOf(w)]
+}
+
+// Run looks up a codeword and returns the window bits it stands for.
+func (b *PhraseBook) Run(prog []bool) ([]bool, bool) {
+	if b == nil || len(prog) == 0 {
+		return nil, false
+	}
+	out, ok := b.dec[FormatBits(prog)]
+	if !ok {
+		return nil, false
+	}
+	return append([]bool(nil), out...), true
+}
+
+// PrefixFree reports whether no codeword is a prefix of another.
+func (b *PhraseBook) PrefixFree() bool {
+	words := make([]string, 0, len(b.dec))
+	for w := range b.dec {
+		words = append(words, w)
+	}
+	for i := 0; i < len(words); i++ {
+		for j := 0; j < len(words); j++ {
+			if i != j && strings.HasPrefix(words[j], words[i]) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func (b *PhraseBook) consider(x []bool, r *KResult) {
+	w, ok := bitsToBytes(x)
+	if !ok {
+		return
+	}
+	prog := b.Program(w)
+	if len(prog) == 0 || (r.K >= 0 && len(prog) >= r.K) {
+		return
+	}
+	got, ok := b.Run(prog)
+	if !ok || !bitsEq(got, x) {
+		return
+	}
+	r.K = len(prog)
+	r.Program = append([]bool(nil), prog...)
+	r.How = "phrase"
+	r.TMSteps = 1
+}
+
+// WindowK is K of w using the U templates and this model's phrase code.
+func (m *PhraseKLM) WindowK(w []byte) (prog []bool, k int, how string) {
+	bits := windowBits(w)
+	r := &KResult{Bits: bits, K: -1, Bound: 256}
+	considerTemplates(bits, 256, r)
+	if m.book != nil {
+		m.book.consider(bits, r)
+	}
+	return r.Program, r.K, r.How
+}
+
+func u64Bits(v uint64, n int) []bool {
+	if n < 1 {
+		n = 1
+	}
+	out := make([]bool, n)
+	for i := 0; i < n; i++ {
+		shift := uint(n - 1 - i)
+		if shift < 64 && v&(uint64(1)<<shift) != 0 {
+			out[i] = true
+		}
+	}
+	return out
+}
+
+func bitsToBytes(x []bool) ([]byte, bool) {
+	if len(x) == 0 || len(x)%8 != 0 {
+		return nil, false
+	}
+	out := make([]byte, len(x)/8)
+	for i := range out {
+		var b byte
+		for bit := 0; bit < 8; bit++ {
+			if x[i*8+bit] {
+				b |= 1 << uint(7-bit)
+			}
+		}
+		out[i] = b
+	}
+	return out, true
 }
 
 func unaryByteBits(w []byte) bool {
@@ -932,6 +1130,7 @@ func TrainPhraseKLM(text []byte, cfg LMConfig) (*PhraseKLM, LMReport, error) {
 		Alphabet: alphabet,
 		ctx:      make(map[byteKey]*phraseCond),
 		tmpl:     make(map[byteKey]int),
+		book:     NewPhraseBook(train, cfg.Window),
 	}
 	for i := cfg.Window; i < len(train); i++ {
 		key := byteKeyOf(train[i-cfg.Window : i])

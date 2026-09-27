@@ -319,6 +319,9 @@ func demoLM(path string, prec uint, kbits int) {
 	fmt.Printf("  |p|4(%q | %q) = %d\n", byte('.'), short, fixed.CodeLen([]byte(short), '.'))
 	fmt.Printf("  |p|16(%q | %q) = %d\n", byte(' '), "    ", vp.CodeLen([]byte("    "), ' '))
 	fmt.Printf("  |p|4(%q | %q) = %d\n", byte(' '), "    ", fixed.CodeLen([]byte("    "), ' '))
+	if _, k, how := fixed.WindowK([]byte("the ")); k > 0 {
+		fmt.Printf("  K(%q) = %d via %s\n", "the ", k, how)
+	}
 	fmt.Printf("var-order %d  train ppl %.2f acc %.3f  valid ppl %.2f acc %.3f\n",
 		vrep.Window, vrep.TrainPPL, vrep.TrainAcc, vrep.ValidPPL, vrep.ValidAcc)
 	fmt.Printf("4-byte       train ppl %.2f acc %.3f  valid ppl %.2f acc %.3f\n",

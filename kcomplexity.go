@@ -195,6 +195,7 @@ type uSearcher struct {
 	queries     int
 	analogSteps uint64
 	cat         map[string]uProg
+	phrases     *PhraseBook
 }
 
 func (s *uSearcher) init(prec uint) {
@@ -369,7 +370,10 @@ func (s *uSearcher) divide(x []bool, leaf, prove int, cache map[string]*KResult)
 		MaxBits: s.maxBits,
 	}
 	considerTemplates(x, prove, r)
-	if r.How == "repeat" {
+	if s.phrases != nil {
+		s.phrases.consider(x, r)
+	}
+	if r.How == "repeat" || r.How == "phrase" {
 		// A splice of smaller repeats is longer. Still look for a
 		// program shorter than this repeat under the bit cap.
 		s.improve(x, r)
