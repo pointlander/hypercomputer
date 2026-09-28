@@ -265,6 +265,34 @@ func TestVarPhraseBeatsFixedOrder(t *testing.T) {
 	}
 }
 
+func TestMixBeatsFourByteOnLongContext(t *testing.T) {
+	var text []byte
+	for i := 0; i < 200; i++ {
+		text = append(text, []byte("xxAAAAz")...)
+		text = append(text, 'y', 'y', 'A', 'A', 'A', 'A', byte('a'+i%14))
+	}
+	mix, mrep, frep, err := CompareMixPhrase(text, LMConfig{
+		ValidFrac: 0.1, MaxBits: 8, Bound: 64, Prec: 64, Seed: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mrep.Kind != "mix" || frep.Kind != "phrase" {
+		t.Fatalf("%s %s", mrep.Kind, frep.Kind)
+	}
+	if mrep.ValidPPL > frep.ValidPPL+1e-6 {
+		t.Fatalf("mix ppl %.3f  4-byte ppl %.3f", mrep.ValidPPL, frep.ValidPPL)
+	}
+	longBits := mix.CodeBits([]byte("xxAAAA"), 'z')
+	if _, _, base, _, err := TrainVarPhrase(text, LMConfig{
+		ValidFrac: 0.1, MaxBits: 8, Bound: 64, Prec: 64, Seed: 1,
+	}); err != nil {
+		t.Fatal(err)
+	} else if longBits >= float64(base.CodeLen([]byte("AAAA"), 'z')) {
+		t.Fatalf("mix bits %.3f  4-byte |p| %d", longBits, base.CodeLen([]byte("AAAA"), 'z'))
+	}
+}
+
 func TestVarPhraseShakespeareSlice(t *testing.T) {
 	text, err := LoadCorpus("pg100.txt")
 	if err != nil {

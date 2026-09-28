@@ -41,12 +41,11 @@ go run ./cmd/hypercomputer -demo=lm -text=pg100.txt
 ```
 
 `lm` compares two next-byte models on The Complete Works of William
-Shakespeare. One is a variable-order phrase code: the longest context
-suffix seen in training, escaping to a shorter suffix when the byte is
-new there, out to 16 bytes. The other is the fixed 4-byte phrase code.
-A training window's Shannon codeword is a program K may select when it
-is shorter than a listing, byte-run, or splice. The last tenth of the
-book is validation for both.
+Shakespeare. One mixes the variable-order phrase code with the fixed
+4-byte code, weighting a long suffix by how often it was seen. The
+other is the 4-byte code alone. A training window's Shannon codeword is
+a program K may select when it is shorter than a listing, byte-run, or
+splice. The last tenth of the book is validation for both.
 
 Long bit strings go through `KDivideConquer`: each block is solved once
 (listing, repeat, or the bounded search) and the prefix-free programs are

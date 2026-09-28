@@ -1010,16 +1010,24 @@ func (m *PhraseKLM) CodeLen(w []byte, b byte) int {
 }
 
 func (m *PhraseKLM) codeLens(w []byte, ell []int) {
+	p := make([]float64, len(ell))
+	m.probs(w, p)
+	for i := range ell {
+		ell[i] = codeLen(p[i])
+	}
+}
+
+// probs writes the 4-byte continuation distribution. It sums to one.
+func (m *PhraseKLM) probs(w []byte, p []float64) {
+	for i := range p {
+		p[i] = 0
+	}
 	cc := m.ctx[byteKeyOf(w)]
-	if cc == nil {
-		m.templateLens(w, ell)
+	if cc == nil || cc.total == 0 || len(cc.succ) == 0 {
+		m.templateProbs(w, p)
 		return
 	}
 	t := len(cc.succ)
-	if t == 0 || cc.total == 0 {
-		m.templateLens(w, ell)
-		return
-	}
 	nUnseen := 0
 	for _, b := range m.Alphabet {
 		if cc.succ[b] == 0 {
@@ -1029,7 +1037,7 @@ func (m *PhraseKLM) codeLens(w []byte, ell []int) {
 	denom := float64(cc.total + t)
 	if nUnseen == 0 {
 		for i, b := range m.Alphabet {
-			ell[i] = codeLen(float64(cc.succ[b]) / float64(cc.total))
+			p[i] = float64(cc.succ[b]) / float64(cc.total)
 		}
 		return
 	}
@@ -1037,7 +1045,7 @@ func (m *PhraseKLM) codeLens(w []byte, ell []int) {
 	var buf [8]byte
 	copy(buf[:len(w)], w)
 	tw := m.templateK(buf[:len(w)])
-	weight := make([]float64, len(ell))
+	weight := make([]float64, len(p))
 	var z float64
 	for i, b := range m.Alphabet {
 		if cc.succ[b] > 0 {
@@ -1053,30 +1061,55 @@ func (m *PhraseKLM) codeLens(w []byte, ell []int) {
 	}
 	for i, b := range m.Alphabet {
 		if c := cc.succ[b]; c > 0 {
-			ell[i] = codeLen(float64(c) / denom)
+			p[i] = float64(c) / denom
 		} else {
-			ell[i] = codeLen(pEsc * weight[i] / z)
+			p[i] = pEsc * weight[i] / z
 		}
 	}
+	normProbs(p)
 }
 
-func (m *PhraseKLM) templateLens(w []byte, ell []int) {
+func (m *PhraseKLM) templateProbs(w []byte, p []float64) {
 	var buf [8]byte
 	copy(buf[:len(w)], w)
 	tw := m.templateK(buf[:len(w)])
-	weight := make([]float64, len(ell))
 	var z float64
 	for i, b := range m.Alphabet {
 		buf[len(w)] = b
 		dt := m.templateK(buf[:len(w)+1]) - tw
-		weight[i] = math.Exp2(-float64(dt))
-		z += weight[i]
+		p[i] = math.Exp2(-float64(dt))
+		z += p[i]
 	}
 	if z == 0 {
 		z = 1
 	}
+	for i := range p {
+		p[i] /= z
+	}
+}
+
+func (m *PhraseKLM) templateLens(w []byte, ell []int) {
+	p := make([]float64, len(ell))
+	m.templateProbs(w, p)
 	for i := range ell {
-		ell[i] = codeLen(weight[i] / z)
+		ell[i] = codeLen(p[i])
+	}
+}
+
+func normProbs(p []float64) {
+	var z float64
+	for _, x := range p {
+		z += x
+	}
+	if z <= 0 {
+		u := 1 / float64(len(p))
+		for i := range p {
+			p[i] = u
+		}
+		return
+	}
+	for i := range p {
+		p[i] /= z
 	}
 }
 
@@ -1412,6 +1445,196 @@ func validSplit(text []byte, cfg LMConfig) []byte {
 // 4-byte phrase code on the same split.
 func CompareVarPhrase(text []byte, cfg LMConfig) (*VarPhrase, LMReport, *PhraseKLM, LMReport, error) {
 	return TrainVarPhrase(text, cfg)
+}
+
+// MixPhrase scores the next byte by the ideal length of
+// λ P_long + (1-λ) P_4, with λ = c_long / (c_long + c_4).
+type MixPhrase struct {
+	long *VarPhrase
+	base *PhraseKLM
+}
+
+// CodeBits is -log2 of the mixture probability, in bits.
+func (m *MixPhrase) CodeBits(w []byte, b byte) float64 {
+	if len(w) > m.long.Max {
+		w = w[len(w)-m.long.Max:]
+	}
+	p := make([]float64, len(m.base.Alphabet))
+	m.probs(w, p)
+	for i, a := range m.base.Alphabet {
+		if a == b {
+			if p[i] <= 0 {
+				return 62
+			}
+			return -math.Log2(p[i])
+		}
+	}
+	return 62
+}
+
+func (m *MixPhrase) probs(ctx []byte, out []float64) {
+	n := len(out)
+	p4 := make([]float64, n)
+	baseCtx := ctx
+	if len(baseCtx) > 4 {
+		baseCtx = baseCtx[len(baseCtx)-4:]
+	}
+	if len(baseCtx) == 4 {
+		m.base.probs(baseCtx, p4)
+	} else {
+		u := 1 / float64(n)
+		for i := range p4 {
+			p4[i] = u
+		}
+	}
+	p16 := make([]float64, n)
+	c16 := m.longProbs(ctx, p16)
+	c4 := 0
+	if len(baseCtx) == 4 {
+		if cc := m.base.ctx[byteKeyOf(baseCtx)]; cc != nil {
+			c4 = cc.total
+		}
+	}
+	lam := 0.0
+	if c16+c4 > 0 {
+		lam = float64(c16) / float64(c16+c4)
+	}
+	for i := range out {
+		out[i] = lam*p16[i] + (1-lam)*p4[i]
+	}
+	normProbs(out)
+}
+
+// longProbs writes the longest repeated suffix distribution and returns
+// its count. The count is zero when no suffix longer than 4 bytes qualifies.
+func (m *MixPhrase) longProbs(ctx []byte, p []float64) int {
+	for i := range p {
+		p[i] = 0
+	}
+	v := m.long
+	lim := len(ctx)
+	if lim > v.Max {
+		lim = v.Max
+	}
+	var used tally
+	var mix map[byte]uint32
+	found := false
+	for k := lim; k >= 5; k-- {
+		t, ok := v.ctx[suffixKey(ctx, k)]
+		if !ok || t.total < ppmMinCount {
+			continue
+		}
+		used = t
+		mix = v.mix[suffixKey(ctx, k)]
+		found = true
+		break
+	}
+	if !found {
+		return 0
+	}
+	kinds := 1
+	if !used.pure {
+		kinds = len(mix)
+	}
+	if kinds < 1 {
+		kinds = 1
+	}
+	denom := float64(used.total) + float64(kinds)
+	if used.pure {
+		for i, b := range v.Alphabet {
+			if b == used.sym {
+				p[i] = float64(used.total) / denom
+			}
+		}
+	} else {
+		for b, c := range mix {
+			idx := v.ClassOf[b]
+			if idx >= 0 && c > 0 {
+				p[idx] = float64(c) / denom
+			}
+		}
+	}
+	nUn := 0
+	var assigned float64
+	for _, x := range p {
+		if x == 0 {
+			nUn++
+		} else {
+			assigned += x
+		}
+	}
+	esc := 1 - assigned
+	if esc < 0 {
+		esc = 0
+	}
+	if nUn > 0 {
+		share := esc / float64(nUn)
+		for i := range p {
+			if p[i] == 0 {
+				p[i] = share
+			}
+		}
+	}
+	normProbs(p)
+	return int(used.total)
+}
+
+func (m *MixPhrase) pass(text []byte) (nll float64, correct, scored, total int) {
+	if len(text) <= 4 {
+		return 0, 0, 0, 0
+	}
+	n := len(m.base.Alphabet)
+	p := make([]float64, n)
+	for i := 4; i < len(text); i++ {
+		total++
+		class := m.base.ClassOf[text[i]]
+		if class < 0 {
+			continue
+		}
+		scored++
+		start := 0
+		if i > m.long.Max {
+			start = i - m.long.Max
+		}
+		m.probs(text[start:i], p)
+		pb := p[class]
+		if pb < 1e-15 {
+			pb = 1e-15
+		}
+		nll += -math.Log(pb)
+		best, arg := p[0], 0
+		for j := 1; j < n; j++ {
+			if p[j] > best {
+				best = p[j]
+				arg = j
+			}
+		}
+		if arg == class {
+			correct++
+		}
+	}
+	return nll, correct, scored, total
+}
+
+// CompareMixPhrase scores the mixture against the fixed 4-byte code
+// on the same split.
+func CompareMixPhrase(text []byte, cfg LMConfig) (*MixPhrase, LMReport, LMReport, error) {
+	cfg.norm()
+	vp, _, base, frep, err := TrainVarPhrase(text, cfg)
+	if err != nil {
+		return nil, LMReport{}, LMReport{}, err
+	}
+	mix := &MixPhrase{long: vp, base: base}
+	train, valid, err := splitCorpus(text, cfg)
+	if err != nil {
+		return nil, LMReport{}, LMReport{}, err
+	}
+	nll, c, s, t := mix.pass(train)
+	vnll, vc, vs, vt := mix.pass(valid)
+	cfg.Window = vp.Max
+	cfg.Epochs = 1
+	rep, err := finishReport("mix", cfg, vp.Max, nll, c, s, t, vnll, vc, vs, vt)
+	return mix, rep, frep, err
 }
 
 // CompareContextModels trains the span-program model and the one-hot
