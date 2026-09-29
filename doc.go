@@ -27,6 +27,8 @@
 //   - a next-byte language model on the Gutenberg Shakespeare text,
 //     mixing a variable-order phrase code with a fixed 4-byte code,
 //     and drawing a continuation from a backoff distribution
+//   - a wider-window next-byte model whose contexts are certified by a
+//     halt oracle grown with Monte Carlo tree search
 //   - Chaitin reconstruction of K_U from analog bits of Ω_U
 //   - a p×T resource sweep: analog Ω bits and dovetail bound vs certified K_U
 //

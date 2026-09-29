@@ -38,6 +38,7 @@ go run ./cmd/hypercomputer -demo=kcomplexity -kstring=1111 -kbits=12
 go run ./cmd/hypercomputer -demo=chaitin -kbits=8
 go run ./cmd/hypercomputer -demo=sweep
 go run ./cmd/hypercomputer -demo=lm -text=pg100.txt -prompt='To be, or not to be' -gen=200
+go run ./cmd/hypercomputer -demo=mcts -text=pg100.txt -gen=200
 ```
 
 `lm` compares two next-byte models on The Complete Works of William
@@ -50,6 +51,13 @@ scores, each new byte is drawn from a Witten-Bell backoff distribution:
 the longest counted suffix blended with the next-shorter one, down to
 the unigram. The draw is conditioned on `-prompt` and then on the bytes
 just written. Counts stay frozen. `-gen=0` skips the sample.
+
+`mcts` is a second next-byte model with a 32-byte window. The exhaustive
+halt oracle only names programs up to 12 bits, which cannot print a
+window that wide. Monte Carlo tree search runs U on programs past that
+limit and keeps a witness for the window. The next byte blends the
+32-byte counts into the shorter mixture. The last tenth of the book
+is validation.
 
 Long bit strings go through `KDivideConquer`: each block is solved once
 (listing, repeat, or the bounded search) and the prefix-free programs are

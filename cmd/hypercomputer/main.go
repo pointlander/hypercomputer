@@ -15,7 +15,7 @@ import (
 )
 
 func main() {
-	demo := flag.String("demo", "all", "bits, oracle, zeno, omega, arnn, newton, quantum, kcomplexity, chaitin, sweep, lm, or all")
+	demo := flag.String("demo", "all", "bits, oracle, zeno, omega, arnn, newton, quantum, kcomplexity, chaitin, sweep, lm, mcts, or all")
 	prec := flag.Uint("prec", 256, "mantissa precision in bits")
 	kstring := flag.String("kstring", "", "bit string for k-complexity (e.g. 1111)")
 	kbits := flag.Int("kbits", 12, "max U-program length for k-complexity search")
@@ -47,6 +47,8 @@ func main() {
 		demoSweep(*prec)
 	case "lm":
 		demoLM(*text, *prec, *kbits, *prompt, *gen)
+	case "mcts":
+		demoMCTS(*text, *prec, *kbits, *prompt, *gen)
 	case "all":
 		demoBits(*prec)
 		demoOracle(*prec)
@@ -340,6 +342,63 @@ func demoLM(path string, prec uint, kbits int, prompt string, gen int) {
 		sample := mix.Generate([]byte(prompt), gen, 1)
 		fmt.Printf("sample %d bytes  seed 1\n", gen)
 		fmt.Printf("%s\n", sample)
+	}
+	fmt.Println()
+}
+
+func demoMCTS(path string, prec uint, kbits int, prompt string, gen int) {
+	fmt.Println("== MCTS halt oracle, 32-byte window ==")
+	body, err := hc.LoadCorpus(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "mcts: %v\n", err)
+		os.Exit(1)
+	}
+	if kbits < 1 {
+		kbits = 12
+	}
+	if len(prompt) < 32 {
+		prompt = "To be, or not to be, that is the "
+	}
+	m, rep, mixRep, err := hc.TrainMCTSLM(body, hc.LMConfig{
+		Window:  32,
+		MaxBits: kbits,
+		Prec:    prec,
+		Sims:    128,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "mcts: %v\n", err)
+		os.Exit(1)
+	}
+	win := []byte(prompt)
+	if len(win) > m.Window {
+		win = win[len(win)-m.Window:]
+	}
+	prog, k, how := m.ContextProgram(win)
+	listing := 3 * (8*len(win) + 1)
+	fmt.Printf("corpus %s  body %d bytes  window %d\n", path, len(body), m.Window)
+	fmt.Printf("oracle evals %d  halting %d  playouts %d\n", m.OracleEvals(), m.OracleHalts(), m.OracleVisits())
+	fmt.Printf("witness K=%d via %s  |p|=%d  listing %d\n", k, how, len(prog), listing)
+	alphabet, probs := m.Distribution(win)
+	type choice struct {
+		b byte
+		p float64
+	}
+	top := make([]choice, len(alphabet))
+	for i, b := range alphabet {
+		top[i] = choice{b, probs[i]}
+	}
+	sort.Slice(top, func(i, j int) bool { return top[i].p > top[j].p })
+	fmt.Printf("P(next | %d-byte prompt)\n", len(win))
+	for i := 0; i < 8 && i < len(top); i++ {
+		fmt.Printf("  %q %.3f\n", top[i].b, top[i].p)
+	}
+	fmt.Printf("mcts    train ppl %.2f acc %.3f  valid ppl %.2f acc %.3f\n",
+		rep.TrainPPL, rep.TrainAcc, rep.ValidPPL, rep.ValidAcc)
+	fmt.Printf("mix     train ppl %.2f acc %.3f  valid ppl %.2f acc %.3f\n",
+		mixRep.TrainPPL, mixRep.TrainAcc, mixRep.ValidPPL, mixRep.ValidAcc)
+	if gen > 0 {
+		fmt.Printf("sample %d bytes  seed 1\n", gen)
+		fmt.Printf("%s\n", m.Generate([]byte(prompt), gen, 1))
 	}
 	fmt.Println()
 }

@@ -66,6 +66,8 @@ type LMConfig struct {
 	Bound     int
 	Prec      uint
 	Seed      uint64
+	// Sims is the MCTS halt-oracle budget. Zero selects the default.
+	Sims int
 }
 
 func (c *LMConfig) norm() {
