@@ -7,6 +7,7 @@ package hypercomputer
 import (
 	"bytes"
 	"math"
+	"math/rand/v2"
 	"testing"
 )
 
@@ -108,4 +109,45 @@ func TestMCTSWindowSeesPastSixteen(t *testing.T) {
 	if math.Abs(sum-1) > 1e-9 {
 		t.Fatalf("sum %g", sum)
 	}
+}
+
+func TestMCTSDecodeFollowsLongCycle(t *testing.T) {
+	text := bytes.Repeat([]byte("    .\n"), 80)
+	m, _, _, err := TrainMCTSLM(text, LMConfig{
+		Window: 24, ValidFrac: 0.1, MaxBits: 8, Bound: 64, Prec: 64, Seed: 1, Sims: 8,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt := []byte("    ")
+	got := m.Generate(prompt, 6, 1)
+	want := m.Greedy(prompt, 6)
+	if string(got) != "    .\n    " || string(got) != string(want) {
+		t.Fatalf("mcts %q greedy %q", got, want)
+	}
+	if again := m.Generate(prompt, 6, 1); string(again) != string(got) {
+		t.Fatalf("redrew %q then %q", got, again)
+	}
+	sample := m.extend(prompt, 6, func(alphabet []byte, p []float64) byte {
+		return pickByte(alphabet, p, rand.New(rand.NewPCG(9, 1)).Float64())
+	})
+	if seqLog(m, got)+1e-9 < seqLog(m, sample) {
+		t.Fatalf("mcts logp %g sample logp %g (%q)", seqLog(m, got), seqLog(m, sample), sample)
+	}
+}
+
+func seqLog(m *MCTSLM, text []byte) float64 {
+	p := make([]float64, len(m.Alphabet))
+	var s float64
+	for i := 0; i < len(text); i++ {
+		m.probs(text[:i], p)
+		pb := 1e-15
+		for j, b := range m.Alphabet {
+			if b == text[i] && j < len(p) && p[j] > pb {
+				pb = p[j]
+			}
+		}
+		s += math.Log(pb)
+	}
+	return s
 }

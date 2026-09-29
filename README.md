@@ -57,7 +57,9 @@ halt oracle only names programs up to 12 bits, which cannot print a
 window that wide. Monte Carlo tree search runs U on programs past that
 limit and keeps a witness for the window. The next byte blends the
 32-byte counts into the shorter mixture. The last tenth of the book
-is validation.
+is validation. The printed continuation is itself a tree search:
+each playout scores an 8-byte horizon by the geometric mean of the
+model probabilities, and the byte with the best playout is kept.
 
 Long bit strings go through `KDivideConquer`: each block is solved once
 (listing, repeat, or the bounded search) and the prefix-free programs are
