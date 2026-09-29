@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 
 	hc "github.com/pointlander/hypercomputer"
@@ -19,6 +20,8 @@ func main() {
 	kstring := flag.String("kstring", "", "bit string for k-complexity (e.g. 1111)")
 	kbits := flag.Int("kbits", 12, "max U-program length for k-complexity search")
 	text := flag.String("text", "pg100.txt", "corpus for -demo=lm (Project Gutenberg text)")
+	prompt := flag.String("prompt", "To be, or not to be", "prompt continued by -demo=lm")
+	gen := flag.Int("gen", 200, "bytes to sample after -prompt (0 skips)")
 	flag.Parse()
 
 	switch *demo {
@@ -43,7 +46,7 @@ func main() {
 	case "sweep":
 		demoSweep(*prec)
 	case "lm":
-		demoLM(*text, *prec, *kbits)
+		demoLM(*text, *prec, *kbits, *prompt, *gen)
 	case "all":
 		demoBits(*prec)
 		demoOracle(*prec)
@@ -293,7 +296,7 @@ func demoKComplexity(prec uint, kstring string, kbits int) {
 	fmt.Println()
 }
 
-func demoLM(path string, prec uint, kbits int) {
+func demoLM(path string, prec uint, kbits int, prompt string, gen int) {
 	fmt.Println("== mixture vs 4-byte phrase code ==")
 	body, err := hc.LoadCorpus(path)
 	if err != nil {
@@ -319,6 +322,25 @@ func demoLM(path string, prec uint, kbits int) {
 		mrep.TrainPPL, mrep.TrainAcc, mrep.ValidPPL, mrep.ValidAcc)
 	fmt.Printf("4-byte  train ppl %.2f acc %.3f  valid ppl %.2f acc %.3f\n",
 		frep.TrainPPL, frep.TrainAcc, frep.ValidPPL, frep.ValidAcc)
+	if gen > 0 {
+		alphabet, probs := mix.Distribution([]byte(prompt))
+		type choice struct {
+			b byte
+			p float64
+		}
+		top := make([]choice, len(alphabet))
+		for i, b := range alphabet {
+			top[i] = choice{b, probs[i]}
+		}
+		sort.Slice(top, func(i, j int) bool { return top[i].p > top[j].p })
+		fmt.Printf("P(next | %q)\n", prompt)
+		for i := 0; i < 8 && i < len(top); i++ {
+			fmt.Printf("  %q %.3f\n", top[i].b, top[i].p)
+		}
+		sample := mix.Generate([]byte(prompt), gen, 1)
+		fmt.Printf("sample %d bytes  seed 1\n", gen)
+		fmt.Printf("%s\n", sample)
+	}
 	fmt.Println()
 }
 

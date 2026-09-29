@@ -6,6 +6,7 @@ package hypercomputer
 
 import (
 	"bytes"
+	"math"
 	"testing"
 )
 
@@ -290,6 +291,80 @@ func TestMixBeatsFourByteOnLongContext(t *testing.T) {
 		t.Fatal(err)
 	} else if longBits >= float64(base.CodeLen([]byte("AAAA"), 'z')) {
 		t.Fatalf("mix bits %.3f  4-byte |p| %d", longBits, base.CodeLen([]byte("AAAA"), 'z'))
+	}
+}
+
+func TestGenerateFromPrompt(t *testing.T) {
+	text := bytes.Repeat([]byte("    .\n"), 300)
+	mix, _, _, err := CompareMixPhrase(text, LMConfig{
+		ValidFrac: 0.1, MaxBits: 8, Bound: 64, Prec: 64, Seed: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt := []byte("    ")
+	got := mix.Greedy(prompt, 6)
+	if string(got) != "    .\n    " {
+		t.Fatalf("greedy %q", got)
+	}
+	before := mix.CodeBits(prompt, '.')
+	sample := mix.Generate(prompt, 6, 1)
+	if again := mix.Generate(prompt, 6, 1); string(again) != string(sample) {
+		t.Fatalf("seed 1 redrew %q then %q", sample, again)
+	}
+	if len(sample) != len(prompt)+6 || !bytes.HasPrefix(sample, prompt) {
+		t.Fatalf("sample %q", sample)
+	}
+	if sample[len(prompt)] != '.' {
+		t.Fatalf("sample starts %q", sample)
+	}
+	allow := map[byte]bool{' ': true, '.': true, '\n': true}
+	for _, b := range sample[len(prompt):] {
+		if !allow[b] {
+			t.Fatalf("byte %q outside alphabet", b)
+		}
+	}
+	if mix.CodeBits(prompt, '.') != before {
+		t.Fatalf("generation changed the mixture")
+	}
+	short := mix.Generate([]byte("x"), 3, 2)
+	if len(short) != 4 || short[0] != 'x' {
+		t.Fatalf("short prompt %q", short)
+	}
+	if string(mix.Generate(prompt, 0, 1)) != string(prompt) {
+		t.Fatal("zero length changed the prompt")
+	}
+}
+
+func TestSampleBacksOffToShorterContext(t *testing.T) {
+	text := []byte("qrstuvwxyz")
+	for i := 0; i < 400; i++ {
+		text = append(text, 'a', 'b', 'c')
+	}
+	mix, _, _, err := CompareMixPhrase(text, LMConfig{
+		ValidFrac: 0.1, MaxBits: 8, Bound: 64, Prec: 64, Seed: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	alphabet, p := mix.Distribution([]byte("qabc"))
+	var sum float64
+	pa := -1.0
+	for i, b := range alphabet {
+		sum += p[i]
+		if b == 'a' {
+			pa = p[i]
+		}
+	}
+	if math.Abs(sum-1) > 1e-9 {
+		t.Fatalf("distribution sums to %g", sum)
+	}
+	if pa < 0.9 {
+		t.Fatalf("P(a | qabc) = %g", pa)
+	}
+	got := mix.Generate([]byte("qabc"), 1, 1)
+	if string(got) != "qabca" {
+		t.Fatalf("sample %q", got)
 	}
 }
 

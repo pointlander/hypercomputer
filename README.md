@@ -37,7 +37,7 @@ go run ./cmd/hypercomputer -demo=quantum -prec=256
 go run ./cmd/hypercomputer -demo=kcomplexity -kstring=1111 -kbits=12
 go run ./cmd/hypercomputer -demo=chaitin -kbits=8
 go run ./cmd/hypercomputer -demo=sweep
-go run ./cmd/hypercomputer -demo=lm -text=pg100.txt
+go run ./cmd/hypercomputer -demo=lm -text=pg100.txt -prompt='To be, or not to be' -gen=200
 ```
 
 `lm` compares two next-byte models on The Complete Works of William
@@ -45,7 +45,11 @@ Shakespeare. One mixes the variable-order phrase code with the fixed
 4-byte code, weighting a long suffix by how often it was seen. The
 other is the 4-byte code alone. A training window's Shannon codeword is
 a program K may select when it is shorter than a listing, byte-run, or
-splice. The last tenth of the book is validation for both.
+splice. The last tenth of the book is validation for both. After the
+scores, each new byte is drawn from a Witten-Bell backoff distribution:
+the longest counted suffix blended with the next-shorter one, down to
+the unigram. The draw is conditioned on `-prompt` and then on the bytes
+just written. Counts stay frozen. `-gen=0` skips the sample.
 
 Long bit strings go through `KDivideConquer`: each block is solved once
 (listing, repeat, or the bounded search) and the prefix-free programs are
