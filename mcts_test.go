@@ -128,11 +128,72 @@ func TestMCTSDecodeFollowsLongCycle(t *testing.T) {
 	if again := m.Generate(prompt, 6, 1); string(again) != string(got) {
 		t.Fatalf("redrew %q then %q", got, again)
 	}
+	long := m.Generate(prompt, 18, 1)
+	if string(long) != "    .\n    .\n    .\n    " {
+		t.Fatalf("cycle %q", long)
+	}
 	sample := m.extend(prompt, 6, func(alphabet []byte, p []float64) byte {
 		return pickByte(alphabet, p, rand.New(rand.NewPCG(9, 1)).Float64())
 	})
 	if seqLog(m, got)+1e-9 < seqLog(m, sample) {
 		t.Fatalf("mcts logp %g sample logp %g (%q)", seqLog(m, got), seqLog(m, sample), sample)
+	}
+}
+
+func TestMCTSDecodeBreaksRepeatedPhrase(t *testing.T) {
+	phrase := []byte("and with my lord, ")
+	alt := []byte("or else depart.\n")
+	var text []byte
+	for i := 0; i < 40; i++ {
+		text = append(text, phrase...)
+		if i%3 == 2 {
+			text = append(text, alt...)
+		}
+	}
+	m, _, _, err := TrainMCTSLM(text, LMConfig{
+		Window: 24, ValidFrac: 0.1, MaxBits: 8, Bound: 64, Prec: 64, Seed: 1, Sims: 8,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := m.Generate(phrase, 80, 1)
+	rest := got[len(phrase):]
+	if !bytes.HasPrefix(rest, alt[:len("or else")]) {
+		t.Fatalf("echoed %q", got)
+	}
+	double := append(append([]byte{}, phrase...), phrase...)
+	if bytes.Contains(got, double) {
+		t.Fatalf("repeated %q", got)
+	}
+	againPrompt := append(append([]byte{}, phrase...), phrase...)
+	continued := m.Generate(againPrompt, 8, 1)
+	if continued[len(againPrompt)] == phrase[0] {
+		t.Fatalf("extended the copy %q", continued)
+	}
+	if again := m.Generate(phrase, 80, 1); string(again) != string(got) {
+		t.Fatalf("redrew %q then %q", got, again)
+	}
+}
+
+func TestLoopedPlayoutSkipsShortCycle(t *testing.T) {
+	phrase := []byte("and with my lord, ")
+	if loopedPlayout(phrase, phrase[:mctsRepeatLen-1]) {
+		t.Fatal("short echo")
+	}
+	if !loopedPlayout(phrase, phrase[:mctsRepeatLen]) {
+		t.Fatal("missed a new copy")
+	}
+	cycle := bytes.Repeat([]byte("    .\n"), 4)
+	if loopedPlayout(cycle, []byte("    .\n")) {
+		t.Fatal("penalized a short cycle")
+	}
+	stuck := bytes.Repeat(phrase, 2)
+	if !loopedPlayout(stuck, phrase[:mctsRepeatLen]) {
+		t.Fatal("missed a continued copy")
+	}
+	long := []byte(" not with my lord, and with you shall have no more they are not with a soldiers, and with all have")
+	if !loopedPlayout(long, long[:mctsRepeatLen]) {
+		t.Fatalf("missed period %d", len(long))
 	}
 }
 

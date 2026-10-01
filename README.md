@@ -60,6 +60,10 @@ limit and keeps a witness for the window. The next byte blends the
 is validation. The printed continuation is itself a tree search:
 each playout scores an 8-byte horizon by the geometric mean of the
 model probabilities, and the byte with the best playout is kept.
+A playout that copies an eight-byte phrase at a period of eight bytes
+or more is down-weighted, and once that copy is in the text its next
+byte is left out of the distribution, so a line cannot keep repeating.
+A cycle with a shorter period is left alone.
 
 Long bit strings go through `KDivideConquer`: each block is solved once
 (listing, repeat, or the bounded search) and the prefix-free programs are

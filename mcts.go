@@ -29,6 +29,12 @@ const (
 	MCTSDecodeSims = 32
 	// mctsPUCT scales the prior inside the tree policy.
 	mctsPUCT = 1.25
+	// mctsRepeatLen is the shortest copied phrase the decoder treats as a loop.
+	// A cycle whose fundamental period is shorter than this, such as
+	// "    .\n", is left alone.
+	mctsRepeatLen = 8
+	// mctsRepeatPenalty multiplies a playout that extends such a loop.
+	mctsRepeatPenalty = 1e-3
 )
 
 const errMCTSWindow lmError = "MCTS window is at most 32 bytes"
@@ -526,9 +532,11 @@ func (m *MCTSLM) Distribution(ctx []byte) (alphabet []byte, probs []float64) {
 // Generate searches the continuation with Monte Carlo tree search.
 // A playout tries one of the MCTSDecodeWidth likeliest bytes, then
 // follows the mode out to MCTSDecodeHorizon. The reward is the
-// geometric mean of those probabilities. The byte kept is the one
-// whose best playout scored highest. seed fixes tie breaks. Counts
-// stay frozen.
+// geometric mean of those probabilities, and a playout that copies an
+// eight-byte phrase is down-weighted. Once that copy is in the text,
+// its next byte is removed from the decoding distribution. A cycle
+// with a shorter period is left alone. The byte kept is the one whose
+// best playout scored highest. seed fixes tie breaks. Counts stay frozen.
 func (m *MCTSLM) Generate(prompt []byte, n int, seed uint64) []byte {
 	if n < 0 {
 		n = 0
@@ -612,7 +620,8 @@ func (m *MCTSLM) decodeSim(root *decNode, text, ctx []byte, p []float64) {
 	for len(added) < MCTSDecodeHorizon {
 		ctx = append(append(ctx[:0], text...), added...)
 		if n.width == nil {
-			n.width = m.topBytes(ctx, p)
+			m.decodeProbs(ctx, p)
+			n.width = rankChoices(m.Alphabet, p)
 		}
 		if len(n.width) == 0 {
 			break
@@ -636,7 +645,7 @@ func (m *MCTSLM) decodeSim(root *decNode, text, ctx []byte, p []float64) {
 	}
 	for len(added) < MCTSDecodeHorizon {
 		ctx = append(append(ctx[:0], text...), added...)
-		m.probs(ctx, p)
+		m.decodeProbs(ctx, p)
 		b, pb := modeChoice(m.Alphabet, p)
 		added = append(added, b)
 		sum += math.Log(floorProb(pb))
@@ -645,6 +654,9 @@ func (m *MCTSLM) decodeSim(root *decNode, text, ctx []byte, p []float64) {
 	reward := 0.0
 	if cnt > 0 {
 		reward = math.Exp(sum / float64(cnt))
+	}
+	if loopedPlayout(text, added) {
+		reward *= mctsRepeatPenalty
 	}
 	for _, node := range path {
 		node.visits++
@@ -662,10 +674,27 @@ func floorProb(p float64) float64 {
 	return p
 }
 
-func (m *MCTSLM) topBytes(ctx []byte, p []float64) []decChoice {
-	m.probs(ctx, p)
-	ch := make([]decChoice, 0, len(m.Alphabet))
+// decodeProbs is the decoding distribution. The byte that would
+// continue a copied phrase of at least mctsRepeatLen bytes, at a
+// period at least that long, is removed.
+func (m *MCTSLM) decodeProbs(ctx []byte, out []float64) {
+	m.probs(ctx, out)
+	p := fundamentalPeriod(ctx)
+	if p < mctsRepeatLen || p > len(ctx) || len(m.Alphabet) == 0 {
+		return
+	}
+	ban := ctx[len(ctx)-p]
 	for i, b := range m.Alphabet {
+		if i < len(out) && b == ban {
+			out[i] = 0
+		}
+	}
+	normProbs(out)
+}
+
+func rankChoices(alphabet []byte, p []float64) []decChoice {
+	ch := make([]decChoice, 0, len(alphabet))
+	for i, b := range alphabet {
 		if i >= len(p) || p[i] <= 0 {
 			continue
 		}
@@ -681,6 +710,49 @@ func (m *MCTSLM) topBytes(ctx []byte, p []float64) []decChoice {
 		ch = ch[:MCTSDecodeWidth]
 	}
 	return ch
+}
+
+// loopedPlayout reports that added extends a copied phrase whose
+// fundamental period is at least mctsRepeatLen. A shorter cycle is
+// not a loop: its fundamental period stays below that length.
+func loopedPlayout(text, added []byte) bool {
+	if len(added) == 0 {
+		return false
+	}
+	full := make([]byte, len(text)+len(added))
+	copy(full, text)
+	copy(full[len(text):], added)
+	p := fundamentalPeriod(full)
+	if p < mctsRepeatLen {
+		return false
+	}
+	return matchAt(full, p) >= mctsRepeatLen
+}
+
+// fundamentalPeriod is the shortest period whose suffix match is at
+// least mctsRepeatLen. Zero means the text has no such copy.
+func fundamentalPeriod(text []byte) int {
+	maxP := len(text) - 1
+	for p := 1; p <= maxP; p++ {
+		if matchAt(text, p) >= mctsRepeatLen {
+			return p
+		}
+	}
+	return 0
+}
+
+func matchAt(text []byte, p int) int {
+	if p < 1 || len(text) <= p {
+		return 0
+	}
+	match := 0
+	for i := len(text) - 1; i-p >= 0 && text[i] == text[i-p]; i-- {
+		match++
+		if match >= mctsRepeatLen {
+			return match
+		}
+	}
+	return match
 }
 
 func puctChild(n *decNode) *decNode {

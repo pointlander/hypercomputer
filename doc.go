@@ -29,7 +29,8 @@
 //     and drawing a continuation from a backoff distribution
 //   - a wider-window next-byte model whose contexts are certified by a
 //     halt oracle grown with Monte Carlo tree search, and whose
-//     continuation is chosen by a tree search over the next bytes
+//     continuation is chosen by a tree search that drops the next byte
+//     of a repeated phrase
 //   - Chaitin reconstruction of K_U from analog bits of Ω_U
 //   - a p×T resource sweep: analog Ω bits and dovetail bound vs certified K_U
 //
