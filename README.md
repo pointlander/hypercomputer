@@ -57,9 +57,11 @@ halt oracle only names programs up to 12 bits, which cannot print a
 window that wide. Monte Carlo tree search runs U on programs past that
 limit and keeps a witness for the window. The next byte blends the
 32-byte counts into the shorter mixture. The last tenth of the book
-is validation. The printed continuation is itself a tree search:
-each playout scores an 8-byte horizon by the geometric mean of the
-model probabilities, and the byte with the best playout is kept.
+is validation. The printed continuation is itself a tree search over the Witten-Bell
+backoff, from the longest counted suffix down to the unigram.
+Each playout scores an 8-byte horizon by the geometric mean of those
+probabilities, and the byte with the best playout is kept.
+The printed perplexity remains the mixture with the 32-byte counts blended in.
 A playout that copies an eight-byte phrase at a period of eight bytes
 or more is down-weighted, and once that copy is in the text its next
 byte is left out of the distribution, so a line cannot keep repeating.

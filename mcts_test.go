@@ -111,6 +111,30 @@ func TestMCTSWindowSeesPastSixteen(t *testing.T) {
 	}
 }
 
+func TestMCTSDecodeBacksOffToShorterContext(t *testing.T) {
+	text := []byte("qrstuvwxyz")
+	for i := 0; i < 400; i++ {
+		text = append(text, 'a', 'b', 'c')
+	}
+	m, _, _, err := TrainMCTSLM(text, LMConfig{
+		Window: 16, ValidFrac: 0.1, MaxBits: 8, Bound: 64, Prec: 64, Seed: 1, Sims: 4,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	alphabet, p := m.DecodeDistribution([]byte("qabc"))
+	var sum, pa float64
+	for i, b := range alphabet {
+		sum += p[i]
+		if b == 'a' {
+			pa = p[i]
+		}
+	}
+	if math.Abs(sum-1) > 1e-9 || pa < 0.9 {
+		t.Fatalf("sum %g P(a|qabc)=%g", sum, pa)
+	}
+}
+
 func TestMCTSDecodeFollowsLongCycle(t *testing.T) {
 	text := bytes.Repeat([]byte("    .\n"), 80)
 	m, _, _, err := TrainMCTSLM(text, LMConfig{

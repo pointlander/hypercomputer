@@ -531,12 +531,14 @@ func (m *MCTSLM) Distribution(ctx []byte) (alphabet []byte, probs []float64) {
 
 // Generate searches the continuation with Monte Carlo tree search.
 // A playout tries one of the MCTSDecodeWidth likeliest bytes, then
-// follows the mode out to MCTSDecodeHorizon. The reward is the
-// geometric mean of those probabilities, and a playout that copies an
-// eight-byte phrase is down-weighted. Once that copy is in the text,
-// its next byte is removed from the decoding distribution. A cycle
+// follows the mode out to MCTSDecodeHorizon. The probabilities are the
+// Witten-Bell backoff from the longest counted suffix down to the
+// unigram. The reward is the geometric mean of those probabilities,
+// and a playout that copies an eight-byte phrase is down-weighted.
+// Once that copy is in the text, its next byte is removed. A cycle
 // with a shorter period is left alone. The byte kept is the one whose
-// best playout scored highest. seed fixes tie breaks. Counts stay frozen.
+// best playout scored highest. seed fixes tie breaks. Counts and the
+// scored mixture stay frozen.
 func (m *MCTSLM) Generate(prompt []byte, n int, seed uint64) []byte {
 	if n < 0 {
 		n = 0
@@ -674,11 +676,32 @@ func floorProb(p float64) float64 {
 	return p
 }
 
-// decodeProbs is the decoding distribution. The byte that would
+// DecodeDistribution is the distribution the tree searches. It is the
+// Witten-Bell backoff, with the next byte of a repeated phrase removed.
+// The scored mixture is unchanged.
+func (m *MCTSLM) DecodeDistribution(ctx []byte) (alphabet []byte, probs []float64) {
+	if m == nil || len(m.Alphabet) == 0 {
+		return nil, nil
+	}
+	alphabet = append([]byte(nil), m.Alphabet...)
+	probs = make([]float64, len(alphabet))
+	m.decodeProbs(ctx, probs)
+	return alphabet, probs
+}
+
+// decodeProbs is the decoding distribution. The backoff replaces the
+// scored mixture, whose unseen escape is flat. The byte that would
 // continue a copied phrase of at least mctsRepeatLen bytes, at a
 // period at least that long, is removed.
 func (m *MCTSLM) decodeProbs(ctx []byte, out []float64) {
-	m.probs(ctx, out)
+	if m.back != nil {
+		m.back.sampleProbs(ctx, out)
+	} else {
+		u := 1 / float64(len(out))
+		for i := range out {
+			out[i] = u
+		}
+	}
 	p := fundamentalPeriod(ctx)
 	if p < mctsRepeatLen || p > len(ctx) || len(m.Alphabet) == 0 {
 		return

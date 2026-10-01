@@ -378,7 +378,7 @@ func demoMCTS(path string, prec uint, kbits int, prompt string, gen int) {
 	fmt.Printf("corpus %s  body %d bytes  window %d\n", path, len(body), m.Window)
 	fmt.Printf("oracle evals %d  halting %d  playouts %d\n", m.OracleEvals(), m.OracleHalts(), m.OracleVisits())
 	fmt.Printf("witness K=%d via %s  |p|=%d  listing %d\n", k, how, len(prog), listing)
-	alphabet, probs := m.Distribution(win)
+	alphabet, probs := m.DecodeDistribution(win)
 	type choice struct {
 		b byte
 		p float64
