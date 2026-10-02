@@ -7,7 +7,10 @@ package hypercomputer
 import (
 	"math"
 	"math/rand/v2"
+	"runtime"
 	"sort"
+	"sync"
+	"sync/atomic"
 )
 
 const (
@@ -95,13 +98,25 @@ type MCTSOracle struct {
 	halt    map[string]bool
 	best    map[string]mctsHit
 	actions []mctsAction
-	rng     *rand.Rand
+	mu      sync.Mutex
+	seed    uint64
+	slots   chan struct{}
+	settled atomic.Bool
 	Evals   int
 	HaltN   int
 }
 
+// mctsProcs is how many playouts and scoring chunks run at once.
+func mctsProcs() int {
+	n := runtime.GOMAXPROCS(0)
+	if n < 1 {
+		return 1
+	}
+	return n
+}
+
 // NewMCTSOracle searches programs of at most maxBits and runs each one
-// for at most bound steps. seed fixes the playout stream.
+// for at most bound steps. seed fixes each worker's playout stream.
 func NewMCTSOracle(maxBits, bound int, seed uint64) *MCTSOracle {
 	if maxBits < DefaultUMaxBits+1 {
 		maxBits = DefaultMCTSMaxBits
@@ -121,7 +136,8 @@ func NewMCTSOracle(maxBits, bound int, seed uint64) *MCTSOracle {
 		halt:    make(map[string]bool),
 		best:    make(map[string]mctsHit),
 		actions: mctsActions(),
-		rng:     rand.New(rand.NewPCG(seed, seed^0x9e3779b97f4a7c15)),
+		seed:    seed,
+		slots:   make(chan struct{}, mctsProcs()),
 	}
 }
 
@@ -130,6 +146,8 @@ func (o *MCTSOracle) Visits() int {
 	if o == nil || o.root == nil {
 		return 0
 	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
 	return o.root.visits
 }
 
@@ -139,24 +157,41 @@ func (o *MCTSOracle) Halts(prog []bool) (halt, known bool) {
 	if o == nil || len(prog) == 0 {
 		return false, false
 	}
-	h, ok := o.halt[FormatBits(prog)]
+	key := FormatBits(prog)
+	if o.settled.Load() {
+		h, ok := o.halt[key]
+		return h, ok
+	}
+	o.mu.Lock()
+	h, ok := o.halt[key]
+	o.mu.Unlock()
 	return h, ok
 }
 
 // OracleBits packs the evaluated halt bits in lexicographic order of
 // the program bit strings. Bit i is 1 when that program halts.
 func (o *MCTSOracle) OracleBits() []bool {
-	if o == nil || len(o.halt) == 0 {
+	if o == nil {
 		return nil
 	}
-	keys := make([]string, 0, len(o.halt))
-	for k := range o.halt {
+	o.mu.Lock()
+	if len(o.halt) == 0 {
+		o.mu.Unlock()
+		return nil
+	}
+	halt := make(map[string]bool, len(o.halt))
+	for k, v := range o.halt {
+		halt[k] = v
+	}
+	o.mu.Unlock()
+	keys := make([]string, 0, len(halt))
+	for k := range halt {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
 	bits := make([]bool, len(keys))
 	for i, k := range keys {
-		bits[i] = o.halt[k]
+		bits[i] = halt[k]
 	}
 	return bits
 }
@@ -164,39 +199,55 @@ func (o *MCTSOracle) OracleBits() []bool {
 // Search runs sims playouts aimed at printing target. A nil target
 // rewards every halting program, which fills the oracle. The result is
 // the shortest witness found for target, including listing and byte-run.
+// Playouts run together, one goroutine per worker.
 func (o *MCTSOracle) Search(target []bool, sims int) (prog []bool, k int, how string) {
 	prog, k, how = o.considerTarget(target)
 	if sims < 1 {
 		return prog, k, how
 	}
-	for i := 0; i < sims; i++ {
-		o.simulate(target)
-	}
-	if hit, ok := o.best[FormatBits(target)]; ok {
-		return hit.prog, hit.k, hit.how
-	}
-	return prog, k, how
+	o.play(target, sims)
+	return o.witnessOf(target, prog, k, how)
 }
 
 // Witness returns a certified program for target, spending a slice of
 // the remaining search budget when the tree might shorten the template.
 func (o *MCTSOracle) Witness(target []bool) (prog []bool, k int, how string) {
+	if len(target) == 0 {
+		return nil, -1, ""
+	}
+	if o.settled.Load() {
+		if hit, ok := o.best[FormatBits(target)]; ok {
+			return hit.prog, hit.k, hit.how
+		}
+	}
 	prog, k, how = o.considerTarget(target)
+	o.mu.Lock()
 	n := o.Per
 	if n > o.Left {
 		n = o.Left
 	}
-	if n < 1 || len(target) == 0 {
+	if n < 1 {
+		o.mu.Unlock()
 		return prog, k, how
 	}
 	o.Left -= n
-	for i := 0; i < n; i++ {
-		o.simulate(target)
+	o.mu.Unlock()
+	o.play(target, n)
+	return o.witnessOf(target, prog, k, how)
+}
+
+func (o *MCTSOracle) witnessOf(target, prog []bool, k int, how string) ([]bool, int, string) {
+	if len(target) == 0 {
+		return prog, k, how
 	}
-	if hit, ok := o.best[FormatBits(target)]; ok {
-		return hit.prog, hit.k, hit.how
+	key := FormatBits(target)
+	o.mu.Lock()
+	hit, ok := o.best[key]
+	o.mu.Unlock()
+	if !ok {
+		return prog, k, how
 	}
-	return prog, k, how
+	return hit.prog, hit.k, hit.how
 }
 
 func (o *MCTSOracle) considerTarget(target []bool) (prog []bool, k int, how string) {
@@ -204,33 +255,71 @@ func (o *MCTSOracle) considerTarget(target []bool) (prog []bool, k int, how stri
 		return nil, -1, ""
 	}
 	key := FormatBits(target)
+	o.mu.Lock()
 	if hit, ok := o.best[key]; ok {
+		o.mu.Unlock()
 		return hit.prog, hit.k, hit.how
 	}
+	o.mu.Unlock()
 	r := &KResult{K: -1, Bound: o.Bound}
 	considerTemplates(target, o.Bound, r)
 	if r.Program == nil || r.K < 0 {
 		return nil, -1, ""
 	}
-	o.halt[FormatBits(r.Program)] = true
-	o.Evals++
-	o.HaltN++
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if hit, ok := o.best[key]; ok {
+		return hit.prog, hit.k, hit.how
+	}
+	o.certify(r.Program)
 	o.best[key] = mctsHit{prog: append([]bool(nil), r.Program...), k: r.K, how: r.How}
 	return o.best[key].prog, r.K, r.How
 }
 
-func (o *MCTSOracle) simulate(target []bool) {
+// play runs sims playouts on separate goroutines. Each worker keeps its
+// own random stream. The tree records a visit before the rollout returns,
+// so two workers do not walk the same untried action.
+func (o *MCTSOracle) play(target []bool, sims int) {
+	if sims < 1 {
+		return
+	}
+	workers := mctsProcs()
+	if workers > sims {
+		workers = sims
+	}
+	var wg sync.WaitGroup
+	for id := 0; id < workers; id++ {
+		n := sims / workers
+		if id < sims%workers {
+			n++
+		}
+		wg.Add(1)
+		go func(id, n int) {
+			defer wg.Done()
+			rng := rand.New(rand.NewPCG(o.seed, uint64(id+1)))
+			for i := 0; i < n; i++ {
+				o.playout(target, rng)
+			}
+		}(id, n)
+	}
+	wg.Wait()
+}
+
+func (o *MCTSOracle) playout(target []bool, rng *rand.Rand) {
+	o.mu.Lock()
 	path := []*mctsNode{o.root}
+	o.root.visits++
 	n := o.root
 	for {
 		if n.dead || len(n.bits) >= o.MaxBits {
 			break
 		}
 		if n.order == nil {
-			n.order = o.feasible(n.bits)
+			n.order = o.feasible(n.bits, rng)
 		}
 		if n.next < len(n.order) {
 			child := o.expand(n)
+			child.visits++
 			path = append(path, child)
 			n = child
 			break
@@ -239,23 +328,34 @@ func (o *MCTSOracle) simulate(target []bool) {
 			break
 		}
 		n = o.bestChild(n)
+		n.visits++
 		path = append(path, n)
 	}
-	reward := o.rollout(n.bits, n.dead, target)
+	start := append([]bool(nil), n.bits...)
+	complete := n.dead
+	o.mu.Unlock()
+
+	prog, res, reward, hit := o.rollout(rng, start, complete, target)
+
+	o.mu.Lock()
+	o.note(prog, res)
+	if hit {
+		o.save(target, prog, "mcts")
+	}
 	for _, node := range path {
-		node.visits++
 		node.value += reward
 	}
+	o.mu.Unlock()
 }
 
-func (o *MCTSOracle) feasible(prefix []bool) []int {
+func (o *MCTSOracle) feasible(prefix []bool, rng *rand.Rand) []int {
 	order := make([]int, 0, len(o.actions))
 	for i, a := range o.actions {
 		if len(prefix)+len(a.bits()) <= o.MaxBits {
 			order = append(order, i)
 		}
 	}
-	o.rng.Shuffle(len(order), func(i, j int) {
+	rng.Shuffle(len(order), func(i, j int) {
 		order[i], order[j] = order[j], order[i]
 	})
 	return order
@@ -289,17 +389,17 @@ func (o *MCTSOracle) bestChild(n *mctsNode) *mctsNode {
 	return best
 }
 
-func (o *MCTSOracle) rollout(start []bool, complete bool, target []bool) float64 {
-	prog := append([]bool(nil), start...)
+func (o *MCTSOracle) rollout(rng *rand.Rand, start []bool, complete bool, target []bool) (prog []bool, res UResult, reward float64, hit bool) {
+	prog = append([]bool(nil), start...)
 	if !complete {
 		for len(prog) < o.MaxBits {
-			if len(prog) > DefaultUMaxBits && o.rng.IntN(4) == 0 {
+			if len(prog) > DefaultUMaxBits && rng.IntN(4) == 0 {
 				if hb := (mctsAction{op: uOpHalt}).bits(); len(prog)+len(hb) <= o.MaxBits {
 					prog = append(prog, hb...)
 				}
 				break
 			}
-			a := o.actions[o.rng.IntN(len(o.actions))]
+			a := o.actions[rng.IntN(len(o.actions))]
 			if a.op == uOpHalt && len(prog) <= DefaultUMaxBits {
 				a = mctsAction{op: uOpOut0}
 			}
@@ -316,21 +416,49 @@ func (o *MCTSOracle) rollout(start []bool, complete bool, target []bool) float64
 			}
 		}
 	}
-	res := RunU(prog, o.Bound)
-	o.note(prog, res)
+	res = o.run(prog)
 	if res.Status == UHalt && res.Read == len(prog) && len(target) > 0 && bitsEq(res.Out, target) {
-		o.save(target, prog, "mcts")
-		return 1 + float64(o.MaxBits-len(prog))/float64(o.MaxBits)
+		hit = true
+		reward = 1 + float64(o.MaxBits-len(prog))/float64(o.MaxBits)
+		return
 	}
 	if len(target) == 0 {
 		if res.Status == UHalt && res.Read == len(prog) {
-			return 1
+			reward = 1
 		}
-		return 0
+		return
 	}
-	return float64(prefixMatch(res.Out, target)) / float64(len(target)+1)
+	reward = float64(prefixMatch(res.Out, target)) / float64(len(target)+1)
+	return
 }
 
+func (o *MCTSOracle) run(prog []bool) UResult {
+	if o.slots != nil {
+		o.slots <- struct{}{}
+		defer func() { <-o.slots }()
+	}
+	return RunU(prog, o.Bound)
+}
+
+// certify records prog as a complete halting program. The caller holds o.mu.
+func (o *MCTSOracle) certify(prog []bool) {
+	if len(prog) == 0 {
+		return
+	}
+	key := FormatBits(prog)
+	if h, seen := o.halt[key]; seen {
+		if !h {
+			o.halt[key] = true
+			o.HaltN++
+		}
+		return
+	}
+	o.halt[key] = true
+	o.Evals++
+	o.HaltN++
+}
+
+// note records one run of prog. The caller holds o.mu.
 func (o *MCTSOracle) note(prog []bool, res UResult) {
 	if len(prog) == 0 {
 		return
@@ -347,6 +475,7 @@ func (o *MCTSOracle) note(prog []bool, res UResult) {
 	}
 }
 
+// save keeps the shortest program that printed target. The caller holds o.mu.
 func (o *MCTSOracle) save(target, prog []bool, how string) {
 	if len(target) == 0 || len(prog) == 0 {
 		return
@@ -455,6 +584,7 @@ func TrainMCTSLM(text []byte, cfg LMConfig) (*MCTSLM, LMReport, LMReport, error)
 		oracle:   oracle,
 	}
 	m.observe(train)
+	m.learn()
 	nll, c, s, t := m.pass(train)
 	vnll, vc, vs, vt := m.pass(valid)
 	cfg.Epochs = 1
@@ -475,6 +605,8 @@ func (m *MCTSLM) OracleEvals() int {
 	if m == nil || m.oracle == nil {
 		return 0
 	}
+	m.oracle.mu.Lock()
+	defer m.oracle.mu.Unlock()
 	return m.oracle.Evals
 }
 
@@ -483,6 +615,8 @@ func (m *MCTSLM) OracleHalts() int {
 	if m == nil || m.oracle == nil {
 		return 0
 	}
+	m.oracle.mu.Lock()
+	defer m.oracle.mu.Unlock()
 	return m.oracle.HaltN
 }
 
@@ -506,6 +640,63 @@ func (m *MCTSLM) observe(text []byte) {
 	}
 	m.ctx = kept
 	m.mixc = keptMix
+}
+
+// learn certifies every repeated window, then spends the playout budget
+// on the earliest windows. Certification runs on several goroutines.
+// The playouts for one window run together. After this, scoring only reads.
+func (m *MCTSLM) learn() {
+	if m == nil || m.oracle == nil {
+		return
+	}
+	keys := make([]mctxKey, 0, len(m.ctx))
+	for key := range m.ctx {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool { return mctxLess(keys[i], keys[j]) })
+	workers := mctsProcs()
+	if workers > len(keys) {
+		workers = len(keys)
+	}
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func(w int) {
+			defer wg.Done()
+			for i := w; i < len(keys); i += workers {
+				raw := keys[i].b[:keys[i].n]
+				m.oracle.considerTarget(windowBits(raw))
+			}
+		}(w)
+	}
+	wg.Wait()
+	left := m.oracle.Left
+	for _, key := range keys {
+		if left < 1 {
+			break
+		}
+		n := m.oracle.Per
+		if n > left {
+			n = left
+		}
+		left -= n
+		raw := key.b[:key.n]
+		m.oracle.play(windowBits(raw), n)
+	}
+	m.oracle.Left = left
+	m.oracle.settled.Store(true)
+}
+
+func mctxLess(a, b mctxKey) bool {
+	if a.n != b.n {
+		return a.n < b.n
+	}
+	for i := 0; i < int(a.n); i++ {
+		if a.b[i] != b.b[i] {
+			return a.b[i] < b.b[i]
+		}
+	}
+	return false
 }
 
 // ContextProgram is the halting program the oracle assigns to the
@@ -902,31 +1093,59 @@ func (m *MCTSLM) pass(text []byte) (nll float64, correct, scored, total int) {
 	if len(text) <= m.Window {
 		return 0, 0, 0, 0
 	}
-	n := len(m.Alphabet)
-	p := make([]float64, n)
-	for i := m.Window; i < len(text); i++ {
-		total++
-		class := m.ClassOf[text[i]]
-		if class < 0 {
-			continue
-		}
-		scored++
-		m.probs(text[:i], p)
-		pb := p[class]
-		if pb < 1e-15 {
-			pb = 1e-15
-		}
-		nll += -math.Log(pb)
-		best, arg := p[0], 0
-		for j := 1; j < n; j++ {
-			if p[j] > best {
-				best = p[j]
-				arg = j
+	npos := len(text) - m.Window
+	workers := mctsProcs()
+	if workers > npos {
+		workers = npos
+	}
+	type part struct {
+		nll                    float64
+		correct, scored, total int
+	}
+	parts := make([]part, workers)
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func(w int) {
+			defer wg.Done()
+			lo := m.Window + w*npos/workers
+			hi := m.Window + (w+1)*npos/workers
+			n := len(m.Alphabet)
+			p := make([]float64, n)
+			var got part
+			for i := lo; i < hi; i++ {
+				got.total++
+				class := m.ClassOf[text[i]]
+				if class < 0 {
+					continue
+				}
+				got.scored++
+				m.probs(text[:i], p)
+				pb := p[class]
+				if pb < 1e-15 {
+					pb = 1e-15
+				}
+				got.nll += -math.Log(pb)
+				best, arg := p[0], 0
+				for j := 1; j < n; j++ {
+					if p[j] > best {
+						best = p[j]
+						arg = j
+					}
+				}
+				if arg == class {
+					got.correct++
+				}
 			}
-		}
-		if arg == class {
-			correct++
-		}
+			parts[w] = got
+		}(w)
+	}
+	wg.Wait()
+	for _, got := range parts {
+		nll += got.nll
+		correct += got.correct
+		scored += got.scored
+		total += got.total
 	}
 	return nll, correct, scored, total
 }

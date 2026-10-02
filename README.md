@@ -55,7 +55,8 @@ just written. Counts stay frozen. `-gen=0` skips the sample.
 `mcts` is a second next-byte model with a 32-byte window. The exhaustive
 halt oracle only names programs up to 12 bits, which cannot print a
 window that wide. Monte Carlo tree search runs U on programs past that
-limit and keeps a witness for the window. The next byte blends the
+limit and keeps a witness for the window. The playouts, and the pass
+that scores the book, run on several goroutines. The next byte blends the
 32-byte counts into the shorter mixture. The last tenth of the book
 is validation. The printed continuation is itself a tree search over the Witten-Bell
 backoff, from the longest counted suffix down to the unigram.

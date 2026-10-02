@@ -11,6 +11,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 )
 
 const (
@@ -719,6 +720,7 @@ type PhraseKLM struct {
 	ClassOf  [256]int
 	Alphabet []byte
 	ctx      map[byteKey]*phraseCond
+	tmplMu   sync.RWMutex
 	tmpl     map[byteKey]int
 	book     *PhraseBook
 }
@@ -730,9 +732,12 @@ type phraseCond struct {
 
 func (m *PhraseKLM) templateK(w []byte) int {
 	key := byteKeyOf(w)
+	m.tmplMu.RLock()
 	if k, ok := m.tmpl[key]; ok {
+		m.tmplMu.RUnlock()
 		return k
 	}
+	m.tmplMu.RUnlock()
 	nbits := 8 * len(w)
 	best := 3 * (nbits + 1)
 	if len(w) >= 2 {
@@ -773,7 +778,13 @@ func (m *PhraseKLM) templateK(w []byte) int {
 			best = n
 		}
 	}
+	m.tmplMu.Lock()
+	if k, ok := m.tmpl[key]; ok {
+		m.tmplMu.Unlock()
+		return k
+	}
 	m.tmpl[key] = best
+	m.tmplMu.Unlock()
 	return best
 }
 
