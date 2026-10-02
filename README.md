@@ -63,6 +63,11 @@ backoff, from the longest counted suffix down to the unigram.
 Each playout scores an 8-byte horizon by the geometric mean of those
 probabilities, and the byte with the best playout is kept.
 The printed perplexity remains the mixture with the 32-byte counts blended in.
+The held-out tail is scored again with a causal cache. The cache starts
+empty at the cut, and a byte is counted only after it is scored. The
+next byte mixes the longest suffix the cache has seen at least twice,
+up to 16 bytes, with that frozen mixture. The mixture's context crosses
+the cut. Training perplexity is unchanged.
 A playout that copies an eight-byte phrase at a period of eight bytes
 or more is down-weighted, and once that copy is in the text its next
 byte is left out of the distribution, so a line cannot keep repeating.

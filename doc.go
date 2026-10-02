@@ -30,7 +30,8 @@
 //   - a wider-window next-byte model whose contexts are certified by a
 //     halt oracle grown with Monte Carlo tree search, and whose
 //     continuation is a tree search over the backoff distribution,
-//     which drops the next byte of a repeated phrase
+//     which drops the next byte of a repeated phrase, and whose
+//     held-out tail is rescored with a causal cache
 //   - Chaitin reconstruction of K_U from analog bits of Ω_U
 //   - a p×T resource sweep: analog Ω bits and dovetail bound vs certified K_U
 //

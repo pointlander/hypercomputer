@@ -164,6 +164,55 @@ func TestMCTSDecodeFollowsLongCycle(t *testing.T) {
 	}
 }
 
+func TestCacheNeedsTwoObservations(t *testing.T) {
+	c := newByteCache()
+	c.add([]byte("xy"), 'z')
+	if _, _, _, ok := c.longest([]byte("xy")); ok {
+		t.Fatal("one observation qualified")
+	}
+	if _, _, k, ok := c.longest([]byte("yz")); ok && k > 0 {
+		t.Fatal("target became context")
+	}
+	c.add([]byte("xy"), 'z')
+	tally, _, k, ok := c.longest([]byte("xy"))
+	if !ok || k != 2 || tally.total != 2 || !tally.pure || tally.sym != 'z' {
+		t.Fatalf("got ok=%v k=%d %+v", ok, k, tally)
+	}
+}
+
+func TestCausalCacheBeatsFrozenTail(t *testing.T) {
+	head := []byte("abc")
+	head = append(head, bytes.Repeat([]byte("0123456789"), 90)...)
+	tail := append(bytes.Repeat([]byte("abc"), 33), 'a')
+	text := append(head, tail...)
+	m, rep, _, err := TrainMCTSLM(text, LMConfig{
+		Window: 8, ValidFrac: 0.1, MaxBits: 8, Bound: 64, Prec: 64, Seed: 1, Sims: 4,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cut := len(head)
+	if len(text)-cut != 100 {
+		t.Fatalf("tail %d", len(text)-cut)
+	}
+	ctx := text[:cut]
+	if string(ctx[len(ctx)-4:]) != "6789" {
+		t.Fatalf("cut context %q", ctx[len(ctx)-4:])
+	}
+	pMix := make([]float64, len(m.Alphabet))
+	pBlend := make([]float64, len(m.Alphabet))
+	m.probs(ctx, pMix)
+	m.blendCache(ctx, newByteCache(), pBlend)
+	for i := range pMix {
+		if math.Abs(pMix[i]-pBlend[i]) > 1e-9 {
+			t.Fatalf("empty cache moved P at %d: %g vs %g", i, pBlend[i], pMix[i])
+		}
+	}
+	if m.CacheN != len(tail) || m.CachePPL <= 0 || m.CachePPL >= 3 || m.CachePPL >= rep.ValidPPL {
+		t.Fatalf("cache n=%d ppl %g frozen valid %g", m.CacheN, m.CachePPL, rep.ValidPPL)
+	}
+}
+
 func TestMCTSDecodeBreaksRepeatedPhrase(t *testing.T) {
 	phrase := []byte("and with my lord, ")
 	alt := []byte("or else depart.\n")

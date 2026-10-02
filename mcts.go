@@ -542,6 +542,11 @@ type MCTSLM struct {
 	mixc     map[mctxKey]map[byte]uint32
 	back     *MixPhrase
 	oracle   *MCTSOracle
+	// CachePPL and CacheAcc score the held-out tail with a causal cache.
+	// CacheN is how many tail bytes were scored. Training counts stay frozen.
+	CachePPL float64
+	CacheAcc float64
+	CacheN   int
 }
 
 // TrainMCTSLM fits the wide-window model on the same split as the mixture.
@@ -587,6 +592,7 @@ func TrainMCTSLM(text []byte, cfg LMConfig) (*MCTSLM, LMReport, LMReport, error)
 	m.learn()
 	nll, c, s, t := m.pass(train)
 	vnll, vc, vs, vt := m.pass(valid)
+	m.scoreCache(text, len(train))
 	cfg.Epochs = 1
 	rep, err := finishReport("mcts", cfg, m.Window, nll, c, s, t, vnll, vc, vs, vt)
 	return m, rep, brep, err
@@ -1148,4 +1154,210 @@ func (m *MCTSLM) pass(text []byte) (nll float64, correct, scored, total int) {
 		total += got.total
 	}
 	return nll, correct, scored, total
+}
+
+// byteCache counts bytes already scored on the held-out tail.
+// Orders run from the empty suffix through DefaultVarOrder.
+type byteCache struct {
+	max int
+	ctx map[ctxKey]tally
+	mix map[ctxKey]map[byte]uint32
+}
+
+func newByteCache() *byteCache {
+	return &byteCache{
+		max: DefaultVarOrder,
+		ctx: make(map[ctxKey]tally),
+		mix: make(map[ctxKey]map[byte]uint32),
+	}
+}
+
+func (c *byteCache) add(ctx []byte, s byte) {
+	if c == nil {
+		return
+	}
+	lim := len(ctx)
+	if lim > c.max {
+		lim = c.max
+	}
+	for k := 0; k <= lim; k++ {
+		var key ctxKey
+		if k > 0 {
+			key = suffixKey(ctx, k)
+		}
+		addTally(c.ctx, c.mix, key, s)
+	}
+}
+
+// longest is the longest suffix seen at least ppmMinCount times.
+func (c *byteCache) longest(ctx []byte) (t tally, succ map[byte]uint32, k int, ok bool) {
+	if c == nil {
+		return tally{}, nil, 0, false
+	}
+	lim := len(ctx)
+	if lim > c.max {
+		lim = c.max
+	}
+	for k = lim; k >= 0; k-- {
+		var key ctxKey
+		if k > 0 {
+			key = suffixKey(ctx, k)
+		}
+		got, found := c.ctx[key]
+		if !found || got.total < ppmMinCount {
+			continue
+		}
+		return got, c.mix[key], k, true
+	}
+	return tally{}, nil, 0, false
+}
+
+// blendCache writes λ P_cache + (1−λ) P_mix. λ is c_cache/(c_cache+c_mix)
+// for the longest repeated cache suffix. An empty cache leaves P_mix.
+func (m *MCTSLM) blendCache(ctx []byte, cache *byteCache, out []float64) {
+	m.probs(ctx, out)
+	if cache == nil {
+		return
+	}
+	t, succ, k, ok := cache.longest(ctx)
+	if !ok || t.total == 0 {
+		return
+	}
+	cCache := int(t.total)
+	cMix := m.trainCount(ctx, k)
+	den := cCache + cMix
+	if den < 1 {
+		return
+	}
+	lam := float64(cCache) / float64(den)
+	if lam <= 0 {
+		return
+	}
+	pc := make([]float64, len(out))
+	writeEmp(pc, t, succ, &m.ClassOf)
+	for i := range out {
+		out[i] = lam*pc[i] + (1-lam)*out[i]
+	}
+	normProbs(out)
+}
+
+func writeEmp(dst []float64, t tally, succ map[byte]uint32, classOf *[256]int) {
+	for i := range dst {
+		dst[i] = 0
+	}
+	if t.total == 0 || classOf == nil {
+		return
+	}
+	if t.pure {
+		if idx := classOf[t.sym]; idx >= 0 && idx < len(dst) {
+			dst[idx] = 1
+		}
+		return
+	}
+	var z float64
+	for b, c := range succ {
+		if c == 0 {
+			continue
+		}
+		idx := classOf[b]
+		if idx < 0 || idx >= len(dst) {
+			continue
+		}
+		p := float64(c) / float64(t.total)
+		dst[idx] += p
+		z += p
+	}
+	if z > 0 {
+		for i := range dst {
+			dst[i] /= z
+		}
+	}
+}
+
+// trainCount is how often the k-byte suffix of ctx occurred in training.
+// Suffixes longer than 4 bytes are counted only when they occurred at
+// least twice; a unique training string contributes nothing.
+func (m *MCTSLM) trainCount(ctx []byte, k int) int {
+	if m == nil || m.back == nil || m.back.long == nil || k < 0 || k > len(ctx) {
+		return 0
+	}
+	v := m.back.long
+	if k >= 5 {
+		if k > v.Max || v.ctx == nil {
+			return 0
+		}
+		t, ok := v.ctx[suffixKey(ctx, k)]
+		if !ok {
+			return 0
+		}
+		return int(t.total)
+	}
+	if k == 4 {
+		b := m.back.base
+		if b == nil || b.ctx == nil {
+			return 0
+		}
+		cc := b.ctx[byteKeyOf(ctx[len(ctx)-4:])]
+		if cc == nil {
+			return 0
+		}
+		return cc.total
+	}
+	if v.low == nil {
+		return 0
+	}
+	var key ctxKey
+	if k > 0 {
+		key = suffixKey(ctx, k)
+	}
+	t, ok := v.low[key]
+	if !ok {
+		return 0
+	}
+	return int(t.total)
+}
+
+// scoreCache scores text[cut:] with the causal cache. The context is the
+// bytes before the target, so it crosses the cut. The target is counted
+// only after it is scored. Training perplexity is left alone.
+func (m *MCTSLM) scoreCache(text []byte, cut int) {
+	if m == nil || len(m.Alphabet) == 0 || cut < 0 || cut >= len(text) {
+		return
+	}
+	cache := newByteCache()
+	n := len(m.Alphabet)
+	p := make([]float64, n)
+	var nll float64
+	var correct, scored, total int
+	for i := cut; i < len(text); i++ {
+		total++
+		class := m.ClassOf[text[i]]
+		ctx := text[:i]
+		if class >= 0 {
+			scored++
+			m.blendCache(ctx, cache, p)
+			pb := p[class]
+			if pb < 1e-15 {
+				pb = 1e-15
+			}
+			nll += -math.Log(pb)
+			best, arg := p[0], 0
+			for j := 1; j < n; j++ {
+				if p[j] > best {
+					best = p[j]
+					arg = j
+				}
+			}
+			if arg == class {
+				correct++
+			}
+		}
+		cache.add(ctx, text[i])
+	}
+	if scored == 0 || total == 0 {
+		return
+	}
+	m.CacheN = total
+	m.CachePPL = math.Exp(nll / float64(scored))
+	m.CacheAcc = float64(correct) / float64(total)
 }

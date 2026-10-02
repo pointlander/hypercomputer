@@ -396,6 +396,7 @@ func demoMCTS(path string, prec uint, kbits int, prompt string, gen int) {
 		rep.TrainPPL, rep.TrainAcc, rep.ValidPPL, rep.ValidAcc)
 	fmt.Printf("mix     train ppl %.2f acc %.3f  valid ppl %.2f acc %.3f\n",
 		mixRep.TrainPPL, mixRep.TrainAcc, mixRep.ValidPPL, mixRep.ValidAcc)
+	fmt.Printf("cache   valid ppl %.2f acc %.3f\n", m.CachePPL, m.CacheAcc)
 	if gen > 0 {
 		fmt.Printf("mcts decode %d bytes  horizon %d  width %d  sims %d\n",
 			gen, hc.MCTSDecodeHorizon, hc.MCTSDecodeWidth, hc.MCTSDecodeSims)
